@@ -46,16 +46,15 @@ plugins:
 
 nav:
   - Home: index.md
-  - Getting Started:
-    - Installation: installation.md
-  - User Guide:
-    - User Guide: user-guide.md
-    - Model Access: model-access.md
+  - Architecture: architecture.md
+  - Installation: installation.md
   - Configuration & Management:
     - Tier Management: tier-management.md
-    - Token Management: token-management.md
     - Gateway Setup: gateway-setup.md
-  - Architecture: architecture.md
+  - User Guide:
+    - User Guide: user-guide.md
+    - Token Management: token-management.md
+    - Model Access: model-access.md
   - Advanced Administration:
     - Observability: observability.md
 

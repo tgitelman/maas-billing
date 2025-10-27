@@ -263,12 +263,27 @@ sequenceDiagram
     Kuadrant->>Authorino: Validate Service Account Token
     Authorino->>AuthPolicy: Check Token Validity
     AuthPolicy-->>Authorino: Token Valid + Tier Info
-    Authorino-->>Kuadrant: Authentication Success
-    Kuadrant->>Limitador: Check Rate Limits
-    Limitador->>RateLimitPolicy: Apply Tier-based Limits
-    RateLimitPolicy-->>Limitador: Rate Limit Status
-    Limitador-->>Kuadrant: Rate Check Result
-    Kuadrant-->>GatewayAPI: Policy Decision (Allow/Deny)
-    GatewayAPI ->> LLMInferenceService: Forward Request
-    LLMInferenceService-->>Client: Response
+    
+    alt Token Invalid
+        Authorino-->>Kuadrant: Authentication Failed
+        Kuadrant-->>GatewayAPI: 401 Unauthorized
+        GatewayAPI-->>Client: 401 Unauthorized
+    else Token Valid
+        Authorino-->>Kuadrant: Authentication Success<br/>Updates request with Tier & User Info
+        Kuadrant->>Limitador: Check Rate Limits<br/>(with Tier & User Context)
+        Limitador->>RateLimitPolicy: Apply Tier-based Limits
+        
+        alt Rate Limit Exceeded
+            RateLimitPolicy-->>Limitador: Rate Limit Exceeded
+            Limitador-->>Kuadrant: 429 Rate Limit Exceeded
+            Kuadrant-->>GatewayAPI: 429 Rate Limit Exceeded
+            GatewayAPI-->>Client: 429 Rate Limit Exceeded
+        else Within Rate Limit
+            RateLimitPolicy-->>Limitador: Rate Limit OK
+            Limitador-->>Kuadrant: Rate Check Passed
+            Kuadrant-->>GatewayAPI: Policy Decision (Allow)
+            GatewayAPI->>LLMInferenceService: Forward Request
+            LLMInferenceService-->>Client: Response
+        end
+    end
 ```
