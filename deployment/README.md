@@ -36,6 +36,25 @@ This guide provides instructions for deploying the MaaS Platform infrastructure 
   # Clean up temporary files
   rm cluster-pull-secret.json stage-pull-secret.json merged-pull-secret.json
   ```
+  Or use this if using podman:
+
+  ```
+  # Create pull secrets in required namespaces
+  kubectl create secret generic wasm-plugin-pull-secret --from-file=.dockerconfigjson=${XDG_RUNTIME_DIR}/containers/auth.json --type=kubernetes.io/dockerconfigjson -n openshift-ingress || true
+  kubectl create secret generic stage-pull-secret --from-file=.dockerconfigjson=${XDG_RUNTIME_DIR}/containers/auth.json --type=kubernetes.io/dockerconfigjson -n openshift-config || true
+  
+  # Merge all pull secrets into the global cluster pull secret
+  oc get secret/pull-secret -n openshift-config --template='{{index .data ".dockerconfigjson" | base64decode}}' > cluster-pull-secret.json
+  oc get secret/stage-pull-secret -n openshift-config --template='{{index .data ".dockerconfigjson" | base64decode}}' > stage-pull-secret.json
+  
+  # Merge all secrets together (This may overwrite the values. You can manually merge the files and set data)
+  jq -s '.[0] * .[1]' cluster-pull-secret.json stage-pull-secret.json > merged-pull-secret.json
+  oc set data secret/pull-secret -n openshift-config --from-file=.dockerconfigjson=merged-pull-secret.json
+  
+  # Clean up temporary files
+  rm cluster-pull-secret.json stage-pull-secret.json merged-pull-secret.json
+  ```
+  
 
 - **RHOAI 3.0.0 RC Installation**:
   After setting up the pull secrets above, follow these steps to complete RHOAI 3.0.0 RC installation:
