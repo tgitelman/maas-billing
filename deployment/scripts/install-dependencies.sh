@@ -1,363 +1,144 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
-# Install Dependencies Script for MaaS Deployment
-# Orchestrates installation of required platform components
-# Supports both vanilla Kubernetes and OpenShift deployments
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
-# Component definitions with installation order
-COMPONENTS=("istio" "cert-manager" "odh" "kserve" "prometheus" "kuadrant"  "grafana")
+KUADRANT_NS="openshift-operators"
+CAT_NAME="kuadrant-operator-catalog"
+CAT_IMAGE="${CAT_IMAGE:-quay.io/kuadrant/kuadrant-operator-catalog:v1.3.0-rc2}"
 
-# OpenShift flag
-OCP=false
+REQ_KUADRANT_CSV="${REQ_KUADRANT_CSV:-kuadrant-operator.v1.3.0-rc2}"
+REQ_AUTHORINO_CSV="${REQ_AUTHORINO_CSV:-authorino-operator.v0.22.0}"
+REQ_LIMITADOR_CSV="${REQ_LIMITADOR_CSV:-limitador-operator.v0.16.0}"
+REQ_DNS_CSV="${REQ_DNS_CSV:-dns-operator.v0.15.0}"
 
-KUADRANT_VERSION="v1.3.0-rc2"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALLERS_DIR="$SCRIPT_DIR/installers"
-
-get_component_description() {
-    case "$1" in
-        istio) echo "Service mesh and Gateway API configuration" ;;
-        cert-manager) echo "Certificate management for TLS and webhooks" ;;
-        odh) echo "OpenDataHub operator for ML/AI platform (OpenShift only)" ;;
-        kserve) 
-            if [[ "$OCP" == true ]]; then
-                echo "Model serving platform (validates OpenShift Serverless)"
-            else
-                echo "Model serving platform"
-            fi
-            ;;
-        prometheus) 
-            if [[ "$OCP" == true ]]; then
-                echo "Observability and metrics collection (validates OpenShift monitoring)"
-            else
-                echo "Observability and metrics collection (optional)"
-            fi
-            ;;
-        grafana) 
-            if [[ "$OCP" == true ]]; then
-                echo "Dashboard visualization platform (OpenShift operator)"
-            else
-                echo "Dashboard visualization platform (not implemented for vanilla Kubernetes)"
-            fi
-            ;;
-        kuadrant) echo "API gateway operators via OLM (Kuadrant, Authorino, Limitador)" ;;
-        *) echo "Unknown component" ;;
-    esac
-}
+log()  { printf "\033[1;34m[INFO]\033[0m %s\n" "$*"; }
+warn() { printf "\033[1;33m[WARN]\033[0m %s\n" "$*"; }
+err()  { printf "\033[1;31m[ERR ]\033[0m %s\n" "$*" >&2; }
 
 usage() {
-    echo "Usage: $0 [OPTIONS]"
-    echo ""
-    echo "Install required dependencies for MaaS deployment."
-    echo ""
-    echo "Options:"
-    echo "  --all                    Install all components"
-    echo "  --istio                  Install Istio service mesh"
-    echo "  --cert-manager           Install cert-manager"
-    echo "  --odh                    Install OpenDataHub operator (OpenShift only)"
-    echo "  --kserve                 Install KServe model serving platform"
-    echo "  --prometheus             Install Prometheus operator"
-    echo "  --grafana                Install Grafana dashboard platform"
-    echo "  --kuadrant               Install Kuadrant operators via OLM"
-    echo "  --ocp                    Use OpenShift-specific handling (validate instead of install)"
-    echo "  -h, --help               Show this help message"
-    echo ""
-    echo "Examples:"
-    echo "  $0 --all              # Install all components (vanilla Kubernetes)"
-    echo "  $0 --all --ocp         # Validate all components (OpenShift)"
-    echo "  $0 --kserve --ocp      # Validate OpenShift Serverless only"
-    echo ""
-    echo "If no options are provided, interactive mode will prompt for component selection."
-    echo ""
-    echo "Components are installed in the following order:"
-    for component in "${COMPONENTS[@]}"; do
-        echo "  - $component: $(get_component_description "$component")"
-    done
+  cat <<EOF
+Usage: $0 [--kuadrant]
+
+Environment:
+  CAT_IMAGE            CatalogSource image (default: ${CAT_IMAGE})
+  KUADRANT_NS          Namespace for operators (default: ${KUADRANT_NS})
+  REQ_*_CSV            Exact CSV names to pin
+EOF
 }
 
-install_component() {
-    local component="$1"
-    local installer_script="$INSTALLERS_DIR/install-${component}.sh"
-    
-    # Special handler for ODH (OpenShift only)
-    if [[ "$component" == "odh" ]]; then
-        if [[ "$OCP" != true ]]; then
-            echo "⚠️  ODH is only available on OpenShift clusters, skipping..."
-            return 0
-        fi
-        if [[ -f "$installer_script" ]]; then
-            echo "🚀 Installing $component..."
-            bash "$installer_script"
-        else
-            echo "❌ Installer script not found: $installer_script"
-            return 1
-        fi
-        return 0
-    fi
-    
-    # Inline handler for Kuadrant (installed via OLM)
-    if [[ "$component" == "kuadrant" ]]; then
-        # Ensure kuadrant-system namespace exists
-        kubectl create namespace kuadrant-system 2>/dev/null || echo "✅ Namespace kuadrant-system already exists"
-
-
-        echo "🚀 Creating Kuadrant OperatorGroup..."
-        kubectl apply -f - <<EOF
-apiVersion: operators.coreos.com/v1
-kind: OperatorGroup
-metadata:
-  name: kuadrant-operator-group
-  namespace: kuadrant-system
-spec: {}
-EOF
-
-        # Check if the CatalogSource already exists before applying
-        if kubectl get catalogsource kuadrant-operator-catalog -n kuadrant-system &>/dev/null; then
-            echo "✅ Kuadrant CatalogSource already exists in namespace kuadrant-system, skipping creation."
-        else
-            echo "🚀 Creating Kuadrant CatalogSource..."
-            kubectl apply -f - <<EOF
+ensure_catalogsource() {
+  log "Ensuring CatalogSource ${CAT_NAME} in ${KUADRANT_NS} -> ${CAT_IMAGE}"
+  cat <<YAML | oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: CatalogSource
 metadata:
-  name: kuadrant-operator-catalog
-  namespace: kuadrant-system
+  name: ${CAT_NAME}
+  namespace: ${KUADRANT_NS}
+  labels:
+    managed-by: maas-installer
 spec:
-  displayName: Kuadrant Operators
-  grpcPodConfig:
-    securityContextConfig: restricted
-  image: 'quay.io/kuadrant/kuadrant-operator-catalog:v1.3.0'
-  publisher: grpc
   sourceType: grpc
-EOF
-        fi
+  image: ${CAT_IMAGE}
+  displayName: Kuadrant Operators
+  publisher: Kuadrant
+YAML
 
+  # Optional, but helps OLM discovery on some clusters: stable Service
+  cat <<YAML | oc apply -f -
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${CAT_NAME}
+  namespace: ${KUADRANT_NS}
+  labels:
+    olm.catalogSource: ${CAT_NAME}
+    managed-by: maas-installer
+spec:
+  selector:
+    olm.catalogSource: ${CAT_NAME}
+  ports:
+  - name: grpc
+    port: 50051
+    targetPort: 50051
+YAML
 
-        echo "🚀 Installing kuadrant (via OLM Subscription)..."
-        kubectl apply -f - <<EOF
-  apiVersion: operators.coreos.com/v1alpha1
-  kind: Subscription
-  metadata:
-    name: kuadrant-operator
-    namespace: kuadrant-system
-  spec:
-    channel: stable
-    installPlanApproval: Automatic
-    name: kuadrant-operator
-    source: kuadrant-operator-catalog
-    sourceNamespace: kuadrant-system
-EOF
-        # Wait for kuadrant-operator-controller-manager deployment to exist before waiting for Available condition
-        ATTEMPTS=0
-        MAX_ATTEMPTS=5
-        while true; do
-
-            if kubectl get deployment/kuadrant-operator-controller-manager -n kuadrant-system &>/dev/null; then
-                break
-            else
-                ATTEMPTS=$((ATTEMPTS+1))
-                if [[ $ATTEMPTS -ge $MAX_ATTEMPTS ]]; then
-                    echo "❌ kuadrant-operator-controller-manager deployment not found after $MAX_ATTEMPTS attempts."
-                    return 1
-                fi
-                echo "⏳ Waiting for kuadrant-operator-controller-manager deployment to be created... (attempt $ATTEMPTS/$MAX_ATTEMPTS)"
-                sleep $((10 + 10 * $ATTEMPTS))
-            fi
-        done
-
-        echo "⏳ Waiting for operators to be ready..."
-        kubectl wait --for=condition=Available deployment/kuadrant-operator-controller-manager -n kuadrant-system --timeout=300s
-        kubectl wait --for=condition=Available deployment/limitador-operator-controller-manager -n kuadrant-system --timeout=300s
-        kubectl wait --for=condition=Available deployment/authorino-operator -n kuadrant-system --timeout=300s
-
-        sleep 5
-
-        # Patch Kuadrant for OpenShift Gateway Controller
-        echo "   Patching Kuadrant operator..."
-        if ! kubectl -n kuadrant-system get deployment kuadrant-operator-controller-manager -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ISTIO_GATEWAY_CONTROLLER_NAMES")]}' | grep -q "ISTIO_GATEWAY_CONTROLLER_NAMES"; then
-          kubectl patch csv kuadrant-operator.v1.3.0 -n kuadrant-system --type='json' -p='[
-            {
-              "op": "add",
-              "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-",
-              "value": {
-                "name": "ISTIO_GATEWAY_CONTROLLER_NAMES",
-                "value": "istio.io/gateway-controller,openshift.io/gateway-controller/v1"
-              }
-            }
-          ]'
-          echo "   ✅ Kuadrant operator patched"
-        else
-          echo "   ✅ Kuadrant operator already configured"
-        fi
-
-        echo "✅ Successfully installed kuadrant"
-        echo ""
-        return 0
-    fi
-
-    if [[ ! -f "$installer_script" ]]; then
-        echo "❌ Installer not found: $installer_script"
-        return 1
-    fi
-    
-    if [[ "$OCP" == true ]]; then
-        echo "🚀 Setting up $component for OpenShift..."
-    else
-        echo "🚀 Installing $component..."
-    fi
-    
-    # Pass --ocp flag to scripts that support it
-    local script_args=()
-    if [[ "$OCP" == true ]] && [[ "$component" == "kserve" || "$component" == "prometheus" || "$component" == "grafana" ]]; then
-        script_args+=("--ocp")
-    fi
-    
-    if ! "$installer_script" "${script_args[@]:-""}"; then
-        if [[ "$OCP" == true ]]; then
-            echo "❌ Failed to set up $component for OpenShift"
-        else
-            echo "❌ Failed to install $component"
-        fi
-        return 1
-    fi
-    
-    if [[ "$OCP" == true ]]; then
-        echo "✅ Successfully set up $component for OpenShift"
-    else
-        echo "✅ Successfully installed $component"
-    fi
-    echo ""
+  # Nudge: OLM sometimes wants a poke
+  oc -n "${KUADRANT_NS}" get pod -l "olm.catalogSource=${CAT_NAME}" >/dev/null 2>&1 || true
 }
 
-install_all() {
-    if [[ "$OCP" == true ]]; then
-        echo "🔧 Setting up all MaaS dependencies for OpenShift..."
-    else
-        echo "🔧 Installing all MaaS dependencies..."
-    fi
-    echo ""
-    
-    for component in "${COMPONENTS[@]}"; do
-        install_component "$component"
-    done
-    
-    if [[ "$OCP" == true ]]; then
-        echo "🎉 All components set up successfully for OpenShift!"
-    else
-        echo "🎉 All components installed successfully!"
-    fi
+patch_or_create_subscription() {
+  local name="$1" package="$2" source="$3" source_ns="$4" channel="$5" starting_csv="$6"
+
+  if oc -n "${KUADRANT_NS}" get subscription "${name}" >/dev/null 2>&1; then
+    log "Patching Subscription ${name}"
+    oc -n "${KUADRANT_NS}" patch subscription "${name}" --type merge -p "{
+      \"spec\":{
+        \"source\":\"${source}\",
+        \"sourceNamespace\":\"${source_ns}\",
+        \"channel\":\"${channel}\",
+        \"startingCSV\":\"${starting_csv}\"
+      }
+    }"
+  else
+    log "Creating Subscription ${name}"
+    cat <<YAML | oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ${name}
+  namespace: ${KUADRANT_NS}
+  labels:
+    managed-by: maas-installer
+spec:
+  channel: ${channel}
+  name: ${package}
+  source: ${source}
+  sourceNamespace: ${source_ns}
+  startingCSV: ${starting_csv}
+  installPlanApproval: Automatic
+YAML
+  fi
 }
 
-interactive_install() {
-    echo "MaaS Dependency Installer"
-    echo "========================"
-    echo ""
-    if [[ "$OCP" == true ]]; then
-        echo "The following components will be set up for OpenShift:"
-    else
-        echo "The following components will be installed:"
-    fi
-    for component in "${COMPONENTS[@]}"; do
-        echo "  - $component: $(get_component_description "$component")"
-    done
-    echo ""
-    
-    if [[ "$OCP" == true ]]; then
-        read -p "Set up all components for OpenShift? (y/N): " -n 1 -r
-    else
-        read -p "Install all components? (y/N): " -n 1 -r
-    fi
-    echo ""
-    
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        install_all
-    else
-        echo "Setup cancelled."
-        exit 0
-    fi
+annotate_resolver_nudge() {
+  for s in "$@"; do
+    oc -n "${KUADRANT_NS}" annotate subscription "$s" "olm.resolvedAt=$(date +%s)" --overwrite || true
+  done
 }
 
-# Parse command line arguments
-# Handle special case: only --ocp flag provided (should go to interactive mode)
-if [[ $# -eq 1 ]] && [[ "$1" == "--ocp" ]]; then
-    OCP=true
-    interactive_install
-    exit 0
-elif [[ $# -eq 0 ]]; then
-    # No arguments - use interactive mode
-    interactive_install
-    exit 0
-fi
+install_kuadrant_stack() {
+  ensure_catalogsource
 
-# First pass: check for --ocp flag (scan without consuming arguments)
-for arg in "$@"; do
-    if [[ "$arg" == "--ocp" ]]; then
-        OCP=true
-        break
-    fi
-done
+  # Find the current dns-operator subscription name (the long one on OCP)
+  local dns_sub
+  dns_sub="$(oc -n "${KUADRANT_NS}" get subscription -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.name}{"\n"}{end}' \
+            | awk '$2=="dns-operator"{print $1; exit}')"
+  if [[ -z "${dns_sub}" ]]; then
+    # Fallback name if nothing exists (rare on vanilla OCP) — we’ll create one
+    dns_sub="dns-operator"
+  fi
 
-# Second pass: process component and action flags
-COMPONENT_SELECTED=false
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --all)
-            install_all
-            exit 0
-            ;;
-        --istio)
-            install_component "istio"
-            COMPONENT_SELECTED=true
-            ;;
-        --cert-manager)
-            install_component "cert-manager"
-            COMPONENT_SELECTED=true
-            ;;
-        --odh)
-            install_component "odh"
-            COMPONENT_SELECTED=true
-            ;;
-        --kserve)
-            install_component "kserve"
-            COMPONENT_SELECTED=true
-            ;;
-        --prometheus)
-            install_component "prometheus"
-            COMPONENT_SELECTED=true
-            ;;
-        --grafana)
-            install_component "grafana"
-            COMPONENT_SELECTED=true
-            ;;
-        --ocp)
-            # Already processed in first pass, skip
-            ;;
-        --kuadrant)
-            install_component "kuadrant"
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1"
-            echo ""
-            usage
-            exit 1
-            ;;
-    esac
-    shift
-done
+  # Subscriptions pinned to our catalog & versions
+  patch_or_create_subscription "authorino-operator" "authorino-operator" "${CAT_NAME}" "${KUADRANT_NS}" "stable" "${REQ_AUTHORINO_CSV}"
+  patch_or_create_subscription "limitador-operator" "limitador-operator" "${CAT_NAME}" "${KUADRANT_NS}" "stable" "${REQ_LIMITADOR_CSV}"
+  patch_or_create_subscription "${dns_sub}"         "dns-operator"       "${CAT_NAME}" "${KUADRANT_NS}" "stable" "${REQ_DNS_CSV}"
+  patch_or_create_subscription "kuadrant-operator"  "kuadrant-operator"  "${CAT_NAME}" "${KUADRANT_NS}" "stable" "${REQ_KUADRANT_CSV}"
 
-# Show success message if components were installed
-if [[ "$COMPONENT_SELECTED" == true ]]; then
-    if [[ "$OCP" == true ]]; then
-        echo "🎉 Selected components set up successfully for OpenShift!"
-    else
-        echo "🎉 Selected components installed successfully!"
-    fi
-fi
+  annotate_resolver_nudge authorino-operator limitador-operator kuadrant-operator "${dns_sub}"
+}
 
+main() {
+  [[ "${1:-}" == "--help" ]] && { usage; exit 0; }
+  case "${1:-}" in
+    --kuadrant)
+      install_kuadrant_stack
+      ;;
+    "" )
+      usage; exit 1;;
+    *)
+      err "Unknown flag: $1"; usage; exit 2;;
+  esac
+}
+
+main "$@"
