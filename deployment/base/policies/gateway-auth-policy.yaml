@@ -29,15 +29,24 @@ spec:
       service-accounts:
         kubernetesTokenReview:
           audiences:
-            - maas-default-gateway-sa
+            - https://kubernetes.default.svc  # For user tokens (oc whoami -t)
+            - maas-default-gateway-sa         # For ServiceAccount tokens (automated clients)
         defaults:
           # token normalization - https://docs.kuadrant.io/1.2.x/authorino/docs/user-guides/token-normalization/
-          # full username: system:serviceaccount:<ns>:<name>
+          # Handle both ServiceAccounts (system:serviceaccount:ns:name) and regular users (email)
           userid:
             expression: |
-              auth.identity.user.username.split(":")[3]
+              auth.identity.user.username.startsWith("system:serviceaccount:") ? 
+                auth.identity.user.username.split(":")[3] : 
+                auth.identity.user.username.split("@")[0]
     authorization:
       tier-access:
+        # Only apply KServe permission checks for model inference paths
+        # Skip maas-api control plane (/maas-api/*, /v1/*)
+        when:
+          - selector: request.path
+            operator: matches
+            value: ^/(?!maas-api|v1)[^/]+/[^/]+/.*   # Matches /{namespace}/{model}/... but NOT /maas-api/* or /v1/*
         kubernetesSubjectAccessReview:
           user:
             expression: auth.identity.user.username

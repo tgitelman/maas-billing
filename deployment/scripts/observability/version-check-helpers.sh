@@ -35,7 +35,7 @@ check_operator_version() {
   
   # Find CSV matching the operator name pattern
   # Use grep instead of JSONPath regex for better compatibility
-  local csv_name=$(kubectl get csv -n "$namespace" -o name 2>/dev/null | grep "/${operator_prefix}" | head -n1 | cut -d'/' -f2)
+  local csv_name=$(oc get csv -n "$namespace" -o name 2>/dev/null | grep "/${operator_prefix}" | head -n1 | cut -d'/' -f2)
   
   if [ -z "$csv_name" ]; then
     echo "   ℹ️  $operator_prefix not found in $namespace"
@@ -43,7 +43,7 @@ check_operator_version() {
   fi
   
   # Check if it's in Succeeded state
-  local phase=$(kubectl get csv "$csv_name" -n "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null)
+  local phase=$(oc get csv "$csv_name" -n "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null)
   if [ "$phase" != "Succeeded" ]; then
     echo "   ⚠️  $csv_name exists but phase is: $phase (not Succeeded)"
     return 1  # Exists but not healthy
@@ -69,7 +69,7 @@ check_operator_version() {
 # Check if CRD exists (simple check, no version)
 check_crd_exists() {
   local crd_name="$1"
-  if kubectl get crd "$crd_name" &>/dev/null; then
+  if oc get crd "$crd_name" &>/dev/null; then
     echo "   ✅ CRD $crd_name exists"
     return 0
   else
@@ -87,13 +87,13 @@ check_crd_version() {
   local crd_name="$1"
   local required_version="$2"  # e.g., "v1", "v1beta1"
   
-  if ! kubectl get crd "$crd_name" &>/dev/null; then
+  if ! oc get crd "$crd_name" &>/dev/null; then
     echo "   ℹ️  CRD $crd_name not found"
     return 1
   fi
   
   # Get all versions supported by the CRD
-  local versions=$(kubectl get crd "$crd_name" -o jsonpath='{.spec.versions[*].name}' 2>/dev/null)
+  local versions=$(oc get crd "$crd_name" -o jsonpath='{.spec.versions[*].name}' 2>/dev/null)
   
   if [ -z "$versions" ]; then
     echo "   ⚠️  Could not get versions for CRD $crd_name"
@@ -116,7 +116,7 @@ check_resource_exists() {
   local resource_name="$2"
   local namespace="$3"
   
-  if kubectl get "$resource_type" "$resource_name" -n "$namespace" &>/dev/null 2>&1; then
+  if oc get "$resource_type" "$resource_name" -n "$namespace" &>/dev/null 2>&1; then
     echo "   ✅ $resource_type/$resource_name exists in $namespace"
     return 0
   else
@@ -130,12 +130,12 @@ check_deployment_ready() {
   local deployment="$1"
   local namespace="$2"
   
-  if ! kubectl get deployment "$deployment" -n "$namespace" &>/dev/null 2>&1; then
+  if ! oc get deployment "$deployment" -n "$namespace" &>/dev/null 2>&1; then
     echo "   ℹ️  Deployment $deployment not found in $namespace"
     return 1
   fi
   
-  local ready=$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null)
+  local ready=$(oc get deployment "$deployment" -n "$namespace" -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null)
   
   if [ "$ready" = "True" ]; then
     echo "   ✅ Deployment $deployment is ready"
@@ -153,12 +153,12 @@ check_deployment_ready() {
 ensure_namespace() {
   local namespace="$1"
   
-  if kubectl get namespace "$namespace" &>/dev/null 2>&1; then
+  if oc get namespace "$namespace" &>/dev/null 2>&1; then
     echo "   ✅ Namespace $namespace already exists"
     return 0
   else
     echo "   📦 Creating namespace $namespace..."
-    if kubectl create namespace "$namespace" 2>/dev/null; then
+    if oc create namespace "$namespace" 2>/dev/null; then
       echo "   ✅ Namespace $namespace created"
       return 0
     else

@@ -56,6 +56,34 @@ After deployment, you can import the Grafana dashboard for monitoring:
 
 See [Dashboard Documentation](../../docs/samples/dashboards/README.md) for detailed setup instructions.
 
+### 🔍 Observability Deployment (Istio Gateway)
+
+For enhanced observability with Istio Gateway and proper metrics collection:
+
+```bash
+./deployment/scripts/observability/deploy-openshift-observability.sh
+```
+
+**What's different:**
+- Uses **Istio GatewayClass** instead of openshift-default for better control and observability
+- Configures **mTLS to be disabled** for services without Istio sidecars (maas-api, Authorino, Limitador)
+- Adds **comprehensive readiness checks** instead of fixed timeouts
+- Wires **Authorino and Limitador metrics** to User Workload Monitoring
+- Handles OpenShift-specific routing (LoadBalancer service + Route with TLS passthrough)
+
+**Key features:**
+- ✅ Automatic CR readiness detection (no hardcoded waits)
+- ✅ Dynamic operator namespace discovery
+- ✅ Smart Gateway status handling (recognizes AddressNotAssigned as expected)
+- ✅ Integrated validation with external accessibility tests
+
+**Validation:**
+```bash
+./deployment/scripts/validate-deployment.sh
+```
+
+All 12 validation tests should pass, including authentication, rate limiting, and model inference.
+
 ### Manual Deployment Steps
 
 ### Step 0: Enable Gateway API Features (OpenShift Only)

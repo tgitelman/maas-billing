@@ -4,6 +4,8 @@ metadata:
   name: maas-api-route
   namespace: maas-api
 spec:
+  hostnames:
+    - maas.apps.pokprod001.ete14.res.ibm.com
   parentRefs:
     - name: maas-default-gateway
       namespace: openshift-ingress

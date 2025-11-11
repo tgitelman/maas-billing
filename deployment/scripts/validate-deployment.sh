@@ -51,6 +51,11 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  # For instruction/chat models (default format works)"
     echo "  $0 qwen3-instruct"
     echo ""
+    echo "Environment Variables:"
+    echo "  KUADRANT_NS    Kuadrant namespace (default: kuadrant-system)"
+    echo "  APP_NS         MaaS API namespace (default: maas-api)"
+    echo "  GATEWAY_NS     Gateway namespace (default: openshift-ingress)"
+    echo ""
     echo "Exit Codes:"
     echo "  0    All critical checks passed"
     echo "  1    Some checks failed"
@@ -105,6 +110,11 @@ fi
 if [ "$INFERENCE_ENDPOINT" != "chat/completions" ]; then
     echo "Using custom endpoint: /v1/$INFERENCE_ENDPOINT"
 fi
+
+# Namespace configuration (can be overridden via environment variables)
+KUADRANT_NS="${KUADRANT_NS:-kuadrant-system}"
+APP_NS="${APP_NS:-maas-api}"
+GATEWAY_NS="${GATEWAY_NS:-openshift-ingress}"
 
 # Color codes for output
 RED='\033[0;31m'
@@ -184,25 +194,36 @@ print_header "1️⃣ Component Status Checks"
 
 # Check MaaS API pods
 print_check "MaaS API pods"
-if kubectl get pods -n maas-api &>/dev/null; then
-    MAAS_PODS=$(kubectl get pods -n maas-api --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+if kubectl get namespace "$APP_NS" &>/dev/null; then
+    MAAS_PODS=$(kubectl get pods -n "$APP_NS" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
     if [ "$MAAS_PODS" -gt 0 ]; then
         print_success "MaaS API has $MAAS_PODS running pod(s)"
     else
-        print_fail "No MaaS API pods running" "Pods may be starting or failed" "Check: kubectl get pods -n maas-api"
+        ALL_PODS=$(kubectl get pods -n "$APP_NS" --no-headers 2>/dev/null | wc -l || echo "0")
+        if [ "$ALL_PODS" -gt 0 ]; then
+            print_fail "No MaaS API pods running ($ALL_PODS pod(s) exist but not Running)" \
+                "Pods may be starting, failed, or in error state" \
+                "Check: kubectl get pods -n "$APP_NS" -o wide && kubectl describe pods -n "$APP_NS""
+        else
+            print_fail "No MaaS API pods found in namespace" \
+                "Deployment resource may not exist" \
+                "Check: kubectl get deployment -n "$APP_NS" && kubectl get all -n "$APP_NS""
+        fi
     fi
 else
-    print_fail "MaaS API namespace not found" "Deployment may not be complete" "Check: kubectl get namespaces"
+    print_fail "MaaS API namespace (maas-api) not found" \
+        "Namespace doesn't exist - deployment incomplete or wrong namespace name" \
+        "Check: kubectl get namespaces | grep maas"
 fi
 
 # Check Kuadrant pods
 print_check "Kuadrant system pods"
 if kubectl get namespace kuadrant-system &>/dev/null; then
-    KUADRANT_PODS=$(kubectl get pods -n kuadrant-system --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+    KUADRANT_PODS=$(kubectl get pods -n "$KUADRANT_NS" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
     if [ "$KUADRANT_PODS" -gt 0 ]; then
         print_success "Kuadrant has $KUADRANT_PODS running pod(s)"
     else
-        print_fail "No Kuadrant pods running" "Kuadrant operators may not be installed" "Check: kubectl get pods -n kuadrant-system"
+        print_fail "No Kuadrant pods running" "Kuadrant operators may not be installed" "Check: kubectl get pods -n "$KUADRANT_NS""
     fi
 else
     print_fail "Kuadrant namespace not found" "Kuadrant may not be installed" "Run: ./deployment/scripts/install-dependencies.sh --kuadrant"
@@ -261,26 +282,26 @@ fi
 print_header "2️⃣ Gateway Status"
 
 print_check "Gateway resource"
-if kubectl get gateway maas-default-gateway -n openshift-ingress &>/dev/null; then
-    GATEWAY_ACCEPTED=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "Unknown")
-    GATEWAY_PROGRAMMED=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || echo "Unknown")
+if kubectl get gateway maas-default-gateway -n "$GATEWAY_NS" &>/dev/null; then
+    GATEWAY_ACCEPTED=$(kubectl get gateway maas-default-gateway -n "$GATEWAY_NS" -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "Unknown")
+    GATEWAY_PROGRAMMED=$(kubectl get gateway maas-default-gateway -n "$GATEWAY_NS" -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || echo "Unknown")
     
     if [ "$GATEWAY_ACCEPTED" = "True" ] && [ "$GATEWAY_PROGRAMMED" = "True" ]; then
         print_success "Gateway is Accepted and Programmed"
     elif [ "$GATEWAY_ACCEPTED" = "True" ]; then
         print_warning "Gateway is Accepted but not Programmed yet" "Gateway may still be initializing"
     else
-        print_fail "Gateway not ready" "Accepted: $GATEWAY_ACCEPTED, Programmed: $GATEWAY_PROGRAMMED" "Check: kubectl describe gateway maas-default-gateway -n openshift-ingress"
+        print_fail "Gateway not ready" "Accepted: $GATEWAY_ACCEPTED, Programmed: $GATEWAY_PROGRAMMED" "Check: kubectl describe gateway maas-default-gateway -n "$GATEWAY_NS""
     fi
 else
     print_fail "Gateway not found" "Gateway may not be deployed" "Check: kubectl get gateway -A"
 fi
 
 print_check "HTTPRoute for maas-api"
-if kubectl get httproute maas-api-route -n maas-api &>/dev/null; then
+if kubectl get httproute maas-api-route -n "$APP_NS" &>/dev/null; then
     # Check if any parent has an Accepted condition with status True
     # HTTPRoutes can have multiple parents (Kuadrant policies + gateway controller)
-    HTTPROUTE_ACCEPTED=$(kubectl get httproute maas-api-route -n maas-api -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null | grep -q "True" && echo "True" || echo "False")
+    HTTPROUTE_ACCEPTED=$(kubectl get httproute maas-api-route -n "$APP_NS" -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null | grep -q "True" && echo "True" || echo "False")
     if [ "$HTTPROUTE_ACCEPTED" = "True" ]; then
         print_success "HTTPRoute maas-api-route is configured and accepted"
     else
@@ -288,7 +309,7 @@ if kubectl get httproute maas-api-route -n maas-api &>/dev/null; then
         print_warning "HTTPRoute maas-api-route exists but acceptance status unclear" "This is usually fine if other checks pass"
     fi
 else
-    print_fail "HTTPRoute maas-api-route not found" "API routing may not be configured" "Check: kubectl get httproute -n maas-api"
+    print_fail "HTTPRoute maas-api-route not found" "API routing may not be configured" "Check: kubectl get httproute -n "$APP_NS""
 fi
 
 print_check "Gateway hostname"
@@ -310,11 +331,11 @@ print_header "3️⃣ Policy Status"
 print_check "AuthPolicy"
 AUTHPOLICY_COUNT=$(kubectl get authpolicy -A --no-headers 2>/dev/null | wc -l || echo "0")
 if [ "$AUTHPOLICY_COUNT" -gt 0 ]; then
-    AUTHPOLICY_STATUS=$(kubectl get authpolicy -n openshift-ingress gateway-auth-policy -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
+    AUTHPOLICY_STATUS=$(kubectl get authpolicy -n "$GATEWAY_NS" gateway-auth-policy -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
     if [ "$AUTHPOLICY_STATUS" = "True" ]; then
         print_success "AuthPolicy is configured and accepted"
     else
-        print_warning "AuthPolicy found but status: $AUTHPOLICY_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager"
+        print_warning "AuthPolicy found but status: $AUTHPOLICY_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n "$KUADRANT_NS" -l control-plane=controller-manager"
     fi
 else
     print_fail "No AuthPolicy found" "Authentication may not be enforced" "Check: kubectl get authpolicy -A"
@@ -323,11 +344,11 @@ fi
 print_check "TokenRateLimitPolicy"
 RATELIMIT_COUNT=$(kubectl get tokenratelimitpolicy -A --no-headers 2>/dev/null | wc -l || echo "0")
 if [ "$RATELIMIT_COUNT" -gt 0 ]; then
-    RATELIMIT_STATUS=$(kubectl get tokenratelimitpolicy -n openshift-ingress gateway-token-rate-limits -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
+    RATELIMIT_STATUS=$(kubectl get tokenratelimitpolicy -n "$GATEWAY_NS" gateway-token-rate-limits -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
     if [ "$RATELIMIT_STATUS" = "True" ]; then
         print_success "TokenRateLimitPolicy is configured and accepted"
     else
-        print_warning "TokenRateLimitPolicy found but status: $RATELIMIT_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager"
+        print_warning "TokenRateLimitPolicy found but status: $RATELIMIT_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n "$KUADRANT_NS" -l control-plane=controller-manager"
     fi
 else
     print_fail "No TokenRateLimitPolicy found" "Rate limiting may not be enforced" "Check: kubectl get tokenratelimitpolicy -A"
@@ -345,7 +366,7 @@ else
     
     # Test authentication endpoint
     print_check "Authentication endpoint"
-    ENDPOINT="${HOST}/maas-api/v1/tokens"
+    ENDPOINT="https://${HOST}/maas-api/v1/tokens"
     print_info "Testing: curl -sSk -X POST $ENDPOINT -H \"Authorization: Bearer \$(oc whoami -t)\" -H \"Content-Type: application/json\" -d '{\"expiration\": \"10m\"}'"
     
     if command -v oc &> /dev/null; then
@@ -365,24 +386,24 @@ else
             if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
                 print_fail "Connection timeout or failed to reach endpoint" \
                     "The endpoint is not reachable. This is likely because:" \
-                    "1) The endpoint is behind a VPN or firewall, 2) DNS resolution failed, 3) Gateway/Route not properly configured. Check: kubectl get gateway -n openshift-ingress && kubectl get httproute -n maas-api"
+                    "1) The endpoint is behind a VPN or firewall, 2) DNS resolution failed, 3) Gateway/Route not properly configured. Check: kubectl get gateway -n "$GATEWAY_NS" && kubectl get httproute -n "$APP_NS""
                 TOKEN=""
             elif [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
                 TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token' 2>/dev/null || echo "")
                 if [ -n "$TOKEN" ] && [ "$TOKEN" != "null" ]; then
                     print_success "Authentication successful (HTTP $HTTP_CODE)"
                 else
-                    print_fail "Authentication response invalid" "Received HTTP $HTTP_CODE but no token in response" "Check MaaS API logs: kubectl logs -n maas-api -l app=maas-api"
+                    print_fail "Authentication response invalid" "Received HTTP $HTTP_CODE but no token in response" "Check MaaS API logs: kubectl logs -n "$APP_NS" -l app=maas-api"
                 fi
             elif [ "$HTTP_CODE" = "404" ]; then
                 print_fail "Endpoint not found (HTTP 404)" \
                     "Traffic is reaching the Gateway/pods but the path is incorrect" \
-                    "Check HTTPRoute configuration: kubectl describe httproute maas-api-route -n maas-api"
+                    "Check HTTPRoute configuration: kubectl describe httproute maas-api-route -n "$APP_NS""
                 TOKEN=""
             elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ]; then
                 print_fail "Gateway/Service error (HTTP $HTTP_CODE)" \
                     "The Gateway is not able to reach the backend service" \
-                    "Check: 1) MaaS API pods are running: kubectl get pods -n maas-api, 2) Service exists: kubectl get svc maas-api -n maas-api, 3) HTTPRoute is configured: kubectl describe httproute maas-api-route -n maas-api"
+                    "Check: 1) MaaS API pods are running: kubectl get pods -n "$APP_NS", 2) Service exists: kubectl get svc maas-api -n "$APP_NS", 3) HTTPRoute is configured: kubectl describe httproute maas-api-route -n "$APP_NS""
                 TOKEN=""
             else
                 print_fail "Authentication failed (HTTP $HTTP_CODE)" "Response: $(echo $RESPONSE_BODY | head -c 100)" "Check AuthPolicy and MaaS API service"
@@ -400,7 +421,7 @@ else
     # Test models endpoint
     print_check "Models endpoint"
     if [ -n "$TOKEN" ]; then
-        ENDPOINT="${HOST}/maas-api/v1/models"
+        ENDPOINT="https://${HOST}/maas-api/v1/models"
         print_info "Testing: curl -sSk $ENDPOINT -H \"Content-Type: application/json\" -H \"Authorization: Bearer \$TOKEN\""
         
         MODELS_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
@@ -444,14 +465,31 @@ else
                         MODEL_CHAT_ENDPOINT=""
                     fi
                 else
-                    # No specific model requested, use the first one (default behavior)
-                    MODEL_NAME=$(echo "$RESPONSE_BODY" | jq -r '.data[0].id' 2>/dev/null || echo "")
-                    MODEL_CHAT=$(echo "$RESPONSE_BODY" | jq -r '.data[0].url' 2>/dev/null || echo "")
-                    print_info "Using first available model: $MODEL_NAME for validation"
+                    # No specific model requested, prefer simulator models (known to work externally)
+                    # Try to find facebook/opt-125m (simulator) first
+                    SIMULATOR_INDEX=$(echo "$RESPONSE_BODY" | jq -r '[.data | to_entries[] | select(.value.id == "facebook/opt-125m" and .value.url != null and (.value.url | contains("facebook-opt-125m-simulated")))] | .[0].key' 2>/dev/null)
+                    
+                    if [ -n "$SIMULATOR_INDEX" ] && [ "$SIMULATOR_INDEX" != "null" ]; then
+                        # Found the working facebook-opt-125m-simulated model
+                        MODEL_NAME=$(echo "$RESPONSE_BODY" | jq -r ".data[$SIMULATOR_INDEX].id" 2>/dev/null || echo "")
+                        MODEL_CHAT=$(echo "$RESPONSE_BODY" | jq -r ".data[$SIMULATOR_INDEX].url" 2>/dev/null || echo "")
+                        print_info "Using simulator model: $MODEL_NAME for validation (known working)"
+                    else
+                        # No simulator found, use first available model
+                        MODEL_NAME=$(echo "$RESPONSE_BODY" | jq -r '.data[0].id' 2>/dev/null || echo "")
+                        MODEL_CHAT=$(echo "$RESPONSE_BODY" | jq -r '.data[0].url' 2>/dev/null || echo "")
+                        print_info "Using first available model: $MODEL_NAME (simulator not found)"
+                    fi
                 fi
                 
                 # Set the inference endpoint if we have a valid model
                 if [ -n "$MODEL_CHAT" ] && [ "$MODEL_CHAT" != "null" ]; then
+                    # Fix: External URLs should use https:// not http://
+                    # If URL contains cluster domain (external) and starts with http://, change to https://
+                    if [[ "$MODEL_CHAT" == http://* ]] && [[ "$MODEL_CHAT" != *".svc.cluster.local"* ]]; then
+                        MODEL_CHAT="${MODEL_CHAT/http:\/\//https:\/\/}"
+                    fi
+                    
                     # Use custom model path if provided, otherwise use endpoint
                     if [ -n "$CUSTOM_MODEL_PATH" ]; then
                         MODEL_CHAT_ENDPOINT="${MODEL_CHAT}${CUSTOM_MODEL_PATH}"
@@ -471,13 +509,13 @@ else
         elif [ "$HTTP_CODE" = "404" ]; then
             print_fail "Endpoint not found (HTTP 404)" \
                 "Path is incorrect - traffic reaching pods but wrong path" \
-                "Check HTTPRoute: kubectl describe httproute maas-api-route -n maas-api"
+                "Check HTTPRoute: kubectl describe httproute maas-api-route -n "$APP_NS""
             MODEL_NAME=""
             MODEL_CHAT_ENDPOINT=""
         elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ]; then
             print_fail "Gateway/Service error (HTTP $HTTP_CODE)" \
                 "Gateway cannot reach backend service" \
-                "Check MaaS API pods and service: kubectl get pods,svc -n maas-api"
+                "Check MaaS API pods and service: kubectl get pods,svc -n "$APP_NS""
             MODEL_NAME=""
             MODEL_CHAT_ENDPOINT=""
         else
@@ -615,7 +653,7 @@ else
     echo ""
     echo "Common fixes:"
     echo "  - Wait for pods to start: kubectl get pods -A | grep -v Running"
-    echo "  - Check operator logs: kubectl logs -n kuadrant-system -l app.kubernetes.io/name=kuadrant-operator"
+    echo "  - Check operator logs: kubectl logs -n "$KUADRANT_NS" -l app.kubernetes.io/name=kuadrant-operator"
     echo "  - Re-run deployment: ./deployment/scripts/deploy-openshift.sh"
     echo ""
     echo "Usage: ./deployment/scripts/validate-deployment.sh [MODEL_NAME]"

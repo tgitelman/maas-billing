@@ -1,0 +1,152 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: maas-default-gateway
+  namespace: openshift-ingress
+  annotations:
+    opendatahub.io/managed: "false"
+  labels:
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/instance: maas-default-gateway
+    app.kubernetes.io/component: gateway
+    opendatahub.io/managed: "false"
+spec:
+  # Using istio because openshift-default GatewayClass controller is not running
+  # (GatewayAPI feature gate is disabled in this cluster)
+  gatewayClassName: istio
+  listeners:
+   - name: http
+     hostname: maas.${CLUSTER_DOMAIN}
+     port: 80
+     protocol: HTTP
+     allowedRoutes:
+       namespaces:
+         from: All
+   - name: https
+     hostname: maas.${CLUSTER_DOMAIN}
+     port: 443
+     protocol: HTTPS
+     allowedRoutes:
+       namespaces:
+         from: All
+     tls:
+       certificateRefs:
+       - group: ''
+         kind: Secret
+         name: default-gateway-tls
+       mode: Terminate
+---
+# Disable mTLS for maas-api (no Istio sidecar)
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: disable-mtls-for-non-mesh
+  namespace: maas-api
+spec:
+  mtls:
+    mode: DISABLE
+---
+# Disable mTLS for Kuadrant components (Authorino has no sidecar)
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: disable-mtls-for-non-mesh
+  namespace: kuadrant-system
+spec:
+  mtls:
+    mode: DISABLE
+---
+# Allow both mTLS and plain text for Gateway
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: permissive-mtls
+  namespace: openshift-ingress
+spec:
+  mtls:
+    mode: PERMISSIVE
+---
+# DestinationRule: disable TLS for outbound connections to maas-api
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: maas-api-disable-mtls
+  namespace: istio-system
+spec:
+  host: "*.maas-api.svc.cluster.local"
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+---
+# DestinationRule: disable TLS for outbound connections to kuadrant-system
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: kuadrant-disable-mtls
+  namespace: istio-system
+spec:
+  host: "*.kuadrant-system.svc.cluster.local"
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+---
+# EnvoyFilter: Create kuadrant-auth-service cluster WITHOUT TLS
+# Priority -2 ensures this runs BEFORE openshift-ai-inference-authn-ssl (priority -1)
+# We use ADD to create the cluster first, so the -1 filter's ADD will be ignored
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: kuadrant-auth-disable-tls
+  namespace: openshift-ingress
+spec:
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: maas-default-gateway
+  priority: -2
+  configPatches:
+  - applyTo: CLUSTER
+    match:
+      cluster:
+        service: authorino-authorino-authorization.kuadrant-system.svc.cluster.local
+    patch:
+      operation: ADD
+      value:
+        name: kuadrant-auth-service
+        type: STRICT_DNS
+        connect_timeout: 1s
+        http2_protocol_options: {}
+        lb_policy: ROUND_ROBIN
+        load_assignment:
+          cluster_name: kuadrant-auth-service
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: authorino-authorino-authorization.kuadrant-system.svc.cluster.local
+                    port_value: 50051
+---
+# OpenShift Route to expose the Istio Gateway externally
+# This is required because the Istio gateway creates a LoadBalancer service
+# which cannot get an external IP in OpenShift without a cloud provider
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: maas-gateway-route
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/name: maas
+    app.kubernetes.io/instance: maas-default-gateway
+    app.kubernetes.io/component: route
+spec:
+  host: maas.${CLUSTER_DOMAIN}
+  port:
+    targetPort: 443
+  tls:
+    termination: passthrough
+  to:
+    kind: Service
+    name: maas-default-gateway-istio
+    weight: 100
+  wildcardPolicy: None
