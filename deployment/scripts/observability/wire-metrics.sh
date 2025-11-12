@@ -48,33 +48,18 @@ fi
 echo "→ Labeling ${KUADRANT_NS}/${AUTH_SVC} with maas.observability/authorino-controller=true"
 oc -n "${KUADRANT_NS}" label svc "${AUTH_SVC}" maas.observability/authorino-controller=true --overwrite >/dev/null
 
-# 3) Create/Update a focused ServiceMonitor that matches ONLY that metrics Service
-SM_NAME="authorino-controller-sm"
-echo "→ Applying ServiceMonitor ${KUADRANT_NS}/${SM_NAME} (idempotent)"
-cat <<'YAML' | sed "s/{{KUADRANT_NS}}/${KUADRANT_NS}/g" | oc apply -f - >/dev/null
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: authorino-controller-sm
-  namespace: {{KUADRANT_NS}}
-  labels:
-    # make it discoverable by UWM
-    openshift.io/user-monitoring: "true"
-    # ownership marker (housekeeping)
-    maas.observability/owned: "true"
-spec:
-  namespaceSelector:
-    matchNames:
-      - {{KUADRANT_NS}}
-  selector:
-    matchLabels:
-      # select only the metrics service we explicitly labeled
-      maas.observability/authorino-controller: "true"
-  endpoints:
-    - port: http
-      path: /metrics
-      interval: 30s
-YAML
+# 3) Apply custom-labeled ServiceMonitors from external YAML file
+#    This includes both /metrics and /server-metrics endpoints for Authorino
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SM_YAML="${SCRIPT_DIR}/../../components/observability/prometheus/observability/kuadrant-servicemonitors-custom-labels.yaml"
+
+echo "→ Applying custom-labeled ServiceMonitors from ${SM_YAML}"
+if [[ ! -f "${SM_YAML}" ]]; then
+  die "ServiceMonitor YAML not found: ${SM_YAML}"
+fi
+
+oc apply -f "${SM_YAML}" -n "${KUADRANT_NS}" >/dev/null
+echo "   ✅ ServiceMonitors applied (authorino-runtime-uwm with /metrics + /server-metrics, limitador-runtime-uwm)"
 
 # 4) Remove stray scrape labels from non-metrics Services that caused 404s
 #    These services don't expose /metrics; leaving the label causes Prometheus to try and fail.

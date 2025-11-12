@@ -1,0 +1,70 @@
+# Custom-labeled ServiceMonitors for User Workload Monitoring (UWM)
+#
+# Purpose: These ServiceMonitors use custom labels (maas.observability/*) instead of
+# native Kuadrant labels to ensure precise service targeting and avoid 404 errors.
+#
+# Problem & Solution:
+# - Authorino creates multiple services: controller-metrics, authorization, and oidc
+# - Only 'authorino-controller-metrics' exposes /metrics and /server-metrics
+# - Native labels may match multiple services causing Prometheus to scrape non-metrics endpoints
+# - Custom labels ensure we ONLY scrape the metrics service, preventing 404 errors
+#
+# Used by: deployment/scripts/observability/wire-metrics.sh
+# Original: kuadrant-servicemonitors.yaml (kept for standalone Prometheus mode)
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: authorino-runtime-uwm
+  labels:
+    environment: base
+    project: models-aas-observability
+    # UWM discovery label - added by wire-metrics.sh
+    openshift.io/user-monitoring: "true"
+    # Ownership marker for housekeeping
+    maas.observability/owned: "true"
+spec:
+  namespaceSelector:
+    matchNames:
+      - kuadrant-system
+  selector:
+    matchLabels:
+      # Custom label applied by wire-metrics.sh to authorino-controller-metrics service only
+      # This ensures we only scrape the metrics service and avoid 404s on authorization/oidc services
+      maas.observability/authorino-controller: "true"
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+    - port: http
+      path: /server-metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: limitador-runtime-uwm
+  labels:
+    environment: base
+    project: models-aas-observability
+    # UWM discovery label - added by wire-metrics.sh
+    openshift.io/user-monitoring: "true"
+    # Ownership marker for housekeeping
+    maas.observability/owned: "true"
+spec:
+  namespaceSelector:
+    matchNames:
+      - kuadrant-system
+  selector:
+    matchLabels:
+      # Using native Limitador labels - safe because Limitador only has one service
+      app: limitador
+      limitador-resource: limitador
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+

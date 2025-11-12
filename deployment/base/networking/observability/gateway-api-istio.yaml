@@ -91,41 +91,8 @@ spec:
     tls:
       mode: DISABLE
 ---
-# EnvoyFilter: Create kuadrant-auth-service cluster WITHOUT TLS
-# Priority -2 ensures this runs BEFORE openshift-ai-inference-authn-ssl (priority -1)
-# We use ADD to create the cluster first, so the -1 filter's ADD will be ignored
-apiVersion: networking.istio.io/v1alpha3
-kind: EnvoyFilter
-metadata:
-  name: kuadrant-auth-disable-tls
-  namespace: openshift-ingress
-spec:
-  workloadSelector:
-    labels:
-      gateway.networking.k8s.io/gateway-name: maas-default-gateway
-  priority: -2
-  configPatches:
-  - applyTo: CLUSTER
-    match:
-      cluster:
-        service: authorino-authorino-authorization.kuadrant-system.svc.cluster.local
-    patch:
-      operation: ADD
-      value:
-        name: kuadrant-auth-service
-        type: STRICT_DNS
-        connect_timeout: 1s
-        http2_protocol_options: {}
-        lb_policy: ROUND_ROBIN
-        load_assignment:
-          cluster_name: kuadrant-auth-service
-          endpoints:
-          - lb_endpoints:
-            - endpoint:
-                address:
-                  socket_address:
-                    address: authorino-authorino-authorization.kuadrant-system.svc.cluster.local
-                    port_value: 50051
+# Note: Kuadrant operator automatically creates EnvoyFilters for auth and ratelimit services
+# Manual EnvoyFilters are not needed and can cause conflicts with the WasmPlugin
 ---
 # OpenShift Route to expose the Istio Gateway externally
 # This is required because the Istio gateway creates a LoadBalancer service

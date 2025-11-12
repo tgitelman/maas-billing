@@ -540,6 +540,8 @@ fi
 echo ""
 echo "[Step 13] Updating Limitador image for metrics exposure..."
 
+# Original image with SHA (used for metrics exposure):
+# quay.io/kuadrant/limitador:1a28eac1b42c63658a291056a62b5d940596fd4c
 if oc -n "$KUADRANT_NS" patch limitador limitador --type merge \
   -p '{"spec":{"image":"quay.io/kuadrant/limitador:1a28eac1b42c63658a291056a62b5d940596fd4c","version":""}}' 2>/dev/null; then
   echo "   ✅ Limitador image updated"
