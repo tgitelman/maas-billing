@@ -183,17 +183,23 @@ echo "[Step 0] Checking OpenShift version and Gateway API requirements..."
 OCP_VERSION=$(oc get clusterversion version -o jsonpath='{.status.desired.version}' 2>/dev/null || echo "unknown")
 echo "   OpenShift version: $OCP_VERSION"
 
-# Check if version is 4.19.9 or higher
+# Check if version is 4.19 or higher for native openshift-default GatewayClass support
 if [[ "$OCP_VERSION" == "unknown" ]]; then
     echo "   ⚠️  Could not determine OpenShift version, applying feature gates to be safe"
+    echo "   ℹ️  Note: Native 'openshift-default' GatewayClass requires OpenShift 4.19+"
+    echo "          This deployment uses 'istio' GatewayClass (works on all versions)"
     oc patch featuregate/cluster --type='merge' \
       -p '{"spec":{"featureSet":"CustomNoUpgrade","customNoUpgrade":{"enabled":["GatewayAPI","GatewayAPIController"]}}}' || true
     echo "   Waiting for feature gates to reconcile (30 seconds)..."
     sleep 30
-elif version_compare "$OCP_VERSION" "4.19.9"; then
-    echo "   ✅ OpenShift $OCP_VERSION supports Gateway API via GatewayClass (no feature gates needed)"
+elif version_compare "$OCP_VERSION" "4.19.0"; then
+    echo "   ✅ OpenShift $OCP_VERSION supports native Gateway API (no feature gates needed)"
+    echo "   ℹ️  Note: This deployment uses 'istio' GatewayClass for compatibility"
+    echo "          Native 'openshift-default' GatewayClass is available on 4.19+ but not used"
 else
-    echo "   Applying Gateway API feature gates for OpenShift < 4.19.9"
+    echo "   ⚠️  OpenShift $OCP_VERSION < 4.19 - native 'openshift-default' GatewayClass not available"
+    echo "   ℹ️  Using 'istio' GatewayClass (compatible with all OpenShift versions)"
+    echo "   Applying Gateway API feature gates for OpenShift < 4.19..."
     oc patch featuregate/cluster --type='merge' \
       -p '{"spec":{"featureSet":"CustomNoUpgrade","customNoUpgrade":{"enabled":["GatewayAPI","GatewayAPIController"]}}}' || true
     echo "   Waiting for feature gates to reconcile (30 seconds)..."
@@ -342,6 +348,11 @@ fi
 # -------- [Step 4] Deploy Gateway Infrastructure --------
 echo ""
 echo "[Step 6] Deploying Gateway infrastructure (observability-specific)..."
+echo "   ℹ️  This deployment uses 'istio' GatewayClass (not 'openshift-default')"
+echo "      Reasons:"
+echo "      - OpenShift 4.19+ required for native 'openshift-default' GatewayClass"
+echo "      - 'istio' GatewayClass works on all OpenShift versions (4.14+)"
+echo "      - Required for this observability deployment pattern"
 
 # Get cluster domain with timeout
 echo "   🔍 Detecting cluster domain..."
@@ -371,23 +382,62 @@ echo "[Step 7] Deploying Kuadrant instance..."
 if check_resource_exists "kuadrant" "kuadrant" "$KUADRANT_NS"; then
   echo "   Kuadrant instance already exists, ensuring it's up to date..."
 else
-  echo "   📦 Creating Kuadrant instance (will create Limitador/Authorino)..."
+  echo "   📦 Creating Kuadrant instance..."
 fi
 
 cd "$PROJECT_ROOT"
 oc apply -f deployment/base/networking/kuadrant.yaml || \
   echo "   ⚠️  Kuadrant instance deployment had issues, continuing..."
 
+# -------- [Step 5.1] Deploy Limitador and Authorino (v1.3.0+ requires manual deployment) --------
+echo "   📦 Creating Limitador and Authorino instances (v1.3.0+ requires manual deployment)..."
+
+# Create Limitador CR
+if check_resource_exists "limitador" "limitador" "$KUADRANT_NS"; then
+  echo "   ✅ Limitador CR already exists"
+else
+  echo "   📦 Creating Limitador CR..."
+  cat <<EOF | oc apply -f -
+apiVersion: limitador.kuadrant.io/v1alpha1
+kind: Limitador
+metadata:
+  name: limitador
+  namespace: $KUADRANT_NS
+spec:
+  replicas: 1
+EOF
+fi
+
+# Create Authorino CR
+if check_resource_exists "authorino" "authorino" "$KUADRANT_NS"; then
+  echo "   ✅ Authorino CR already exists"
+else
+  echo "   📦 Creating Authorino CR..."
+  cat <<EOF | oc apply -f -
+apiVersion: operator.authorino.kuadrant.io/v1beta1
+kind: Authorino
+metadata:
+  name: authorino
+  namespace: $KUADRANT_NS
+spec:
+  listener:
+    tls:
+      enabled: false
+  oidcServer:
+    tls:
+      enabled: false
+EOF
+fi
+
 echo "   ⏳ Waiting for Limitador and Authorino CRs to be created..."
-# Wait for CRs to exist (not necessarily ready yet)
-for i in {1..30}; do
+for i in {1..10}; do
   if oc get limitador limitador -n "$KUADRANT_NS" &>/dev/null && \
      oc get authorino authorino -n "$KUADRANT_NS" &>/dev/null; then
     echo "   ✅ Limitador and Authorino CRs created"
     break
   fi
-  if [ $i -eq 30 ]; then
-    echo "   ⚠️  CRs not created after 30 seconds (may be created later)"
+  if [ $i -eq 10 ]; then
+    echo "   ⚠️  CRs not created after 10 seconds"
   fi
   sleep 1
 done
@@ -625,9 +675,31 @@ else
 fi
 echo "   ✅ Observability resources deployment attempted"
 
-# -------- [Step 13] Wire Authorino Metrics --------
+# -------- [Step 13] Wait for Kuadrant Components --------
 echo ""
-echo "[Step 15] Wiring Authorino metrics to User Workload Monitoring..."
+echo "[Step 15] Waiting for Kuadrant components to be ready..."
+
+# Wait for Authorino CR to be ready
+echo "   - Waiting for Authorino instance..."
+if oc wait --for=condition=Ready authorino authorino -n "$KUADRANT_NS" --timeout=300s 2>&1; then
+  echo "     ✅ Authorino ready"
+else
+  echo "     ⚠️  Authorino not ready after timeout"
+  echo "     Metrics wiring may fail, but continuing..."
+fi
+
+# Wait for Limitador CR to be ready
+echo "   - Waiting for Limitador instance..."
+if oc wait --for=condition=Ready limitador limitador -n "$KUADRANT_NS" --timeout=120s 2>&1; then
+  echo "     ✅ Limitador ready"
+else
+  echo "     ⚠️  Limitador not ready after timeout"
+  echo "     Metrics wiring may fail, but continuing..."
+fi
+
+# -------- [Step 13.1] Wire Authorino Metrics --------
+echo ""
+echo "[Step 15.1] Wiring Authorino metrics to User Workload Monitoring..."
 
 if [[ ! -x "${WIRE_SCRIPT}" ]]; then
   die "wire script not found or not executable: ${WIRE_SCRIPT} (chmod +x wire-metrics.sh)"
@@ -685,23 +757,7 @@ fi
 echo ""
 echo "[Step 16] Validating deployment..."
 
-echo "   ⏳ Waiting for critical components to be ready..."
-
-# Wait for Authorino CR to be ready
-echo "   - Waiting for Authorino instance..."
-if oc wait --for=condition=Ready authorino authorino -n kuadrant-system --timeout=300s 2>&1; then
-  echo "     ✅ Authorino ready"
-else
-  echo "     ⚠️  Authorino not ready after timeout (may still work)"
-fi
-
-# Wait for Limitador CR to be ready
-echo "   - Waiting for Limitador instance..."
-if oc wait --for=condition=Ready limitador limitador -n kuadrant-system --timeout=120s 2>&1; then
-  echo "     ✅ Limitador ready"
-else
-  echo "     ⚠️  Limitador not ready after timeout (may still work)"
-fi
+echo "   ⏳ Waiting for policy enforcement..."
 
 # Wait for AuthPolicy to be enforced
 echo "   - Waiting for AuthPolicy enforcement..."
@@ -719,7 +775,7 @@ else
   echo "     ⚠️  HTTPRoute not accepted after timeout"
 fi
 
-echo "   ✅ Readiness checks complete"
+echo "   ✅ Validation checks complete"
 
 VALIDATE_SCRIPT="${PROJECT_ROOT}/deployment/scripts/validate-deployment.sh"
 if [[ -x "${VALIDATE_SCRIPT}" ]]; then

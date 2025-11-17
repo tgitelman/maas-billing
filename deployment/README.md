@@ -58,14 +58,14 @@ See [Dashboard Documentation](../../docs/samples/dashboards/README.md) for detai
 
 ### 🔍 Observability Deployment (Istio Gateway)
 
-For enhanced observability with Istio Gateway and proper metrics collection:
+For MaaS deployment with full observability stack (metrics, monitoring, and telemetry):
 
 ```bash
 ./deployment/scripts/observability/deploy-openshift-observability.sh
 ```
 
 **What's different:**
-- Uses **Istio GatewayClass** instead of openshift-default for better control and observability
+- Uses **Istio GatewayClass** instead of openshift-default (compatible with OpenShift < 4.19)
 - Configures **mTLS to be disabled** for services without Istio sidecars (maas-api, Authorino, Limitador)
 - Adds **comprehensive readiness checks** instead of fixed timeouts
 - Wires **Authorino and Limitador metrics** to User Workload Monitoring

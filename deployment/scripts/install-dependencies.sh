@@ -5,9 +5,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
 KUADRANT_NS="openshift-operators"
 CAT_NAME="kuadrant-operator-catalog"
-CAT_IMAGE="${CAT_IMAGE:-quay.io/kuadrant/kuadrant-operator-catalog:v1.3.0-rc2}"
+CAT_IMAGE="${CAT_IMAGE:-quay.io/kuadrant/kuadrant-operator-catalog:v1.3.0}"
 
-REQ_KUADRANT_CSV="${REQ_KUADRANT_CSV:-kuadrant-operator.v1.3.0-rc2}"
+REQ_KUADRANT_CSV="${REQ_KUADRANT_CSV:-kuadrant-operator.v1.3.0}"
 REQ_AUTHORINO_CSV="${REQ_AUTHORINO_CSV:-authorino-operator.v0.22.0}"
 REQ_LIMITADOR_CSV="${REQ_LIMITADOR_CSV:-limitador-operator.v0.16.0}"
 REQ_DNS_CSV="${REQ_DNS_CSV:-dns-operator.v0.15.0}"
@@ -108,6 +108,26 @@ annotate_resolver_nudge() {
 }
 
 install_kuadrant_stack() {
+  # Check for existing Kuadrant installations in ANY namespace
+  local existing_kuadrant
+  existing_kuadrant="$(oc get csv -A -o json | jq -r '.items[] | select(.metadata.name | startswith("kuadrant-operator") or startswith("rhcl-operator")) | "\(.metadata.namespace)/\(.metadata.name)"' | head -1)"
+  
+  if [[ -n "${existing_kuadrant}" ]]; then
+    local existing_ns="${existing_kuadrant%%/*}"
+    local existing_csv="${existing_kuadrant##*/}"
+    
+    if [[ "${existing_ns}" != "${KUADRANT_NS}" ]]; then
+      err "Found existing Kuadrant operator in namespace '${existing_ns}' (CSV: ${existing_csv})"
+      err "This conflicts with installing in '${KUADRANT_NS}'"
+      err "Please delete the conflicting installation first:"
+      err "  oc delete csv ${existing_csv} -n ${existing_ns}"
+      err "  # OR delete the entire namespace: oc delete namespace ${existing_ns}"
+      exit 1
+    else
+      log "Found existing Kuadrant in target namespace ${KUADRANT_NS}, will upgrade/patch if needed"
+    fi
+  fi
+
   ensure_catalogsource
 
   # Find the current dns-operator subscription name (the long one on OCP)
@@ -115,7 +135,7 @@ install_kuadrant_stack() {
   dns_sub="$(oc -n "${KUADRANT_NS}" get subscription -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.name}{"\n"}{end}' \
             | awk '$2=="dns-operator"{print $1; exit}')"
   if [[ -z "${dns_sub}" ]]; then
-    # Fallback name if nothing exists (rare on vanilla OCP) — we’ll create one
+    # Fallback name if nothing exists (rare on vanilla OCP) — we'll create one
     dns_sub="dns-operator"
   fi
 
