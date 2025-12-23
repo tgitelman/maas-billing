@@ -1979,7 +1979,8 @@
 </div>
 <ul>
 <li><strong>Limitador</strong>: Rate limiting service that exposes metrics</li>
-<li><strong>Prometheus</strong>: Metrics collection and storage</li>
+<li><strong>Prometheus</strong>: Metrics collection and storage (uses OpenShift platform Prometheus on OpenShift clusters)</li>
+<li><strong>ServiceMonitors</strong>: Automatically deployed to configure Prometheus metric scraping</li>
 <li><strong>Grafana</strong>: Metrics visualization and dashboards</li>
 <li><strong>Future</strong>: Migration to Perses for enhanced dashboard management</li>
 </ul>
@@ -2007,20 +2008,35 @@
 <li><code>limitador_ratelimit_tier_denied_total</code>: Denied requests per tier</li>
 </ul>
 <h3 id="servicemonitor-configuration">ServiceMonitor Configuration</h3>
-<p>For automatic discovery of services, use ServiceMonitor resources:</p>
+<p>ServiceMonitors are automatically deployed during the main deployment (step 14) to configure OpenShift's Prometheus to discover and scrape metrics from MaaS components.</p>
+<p><strong>Automatically Deployed ServiceMonitors:</strong></p>
+<ul>
+<li><strong>Limitador</strong>: Scrapes rate limiting metrics from Limitador pods</li>
+<li><strong>Authorino</strong>: Scrapes authentication metrics from Authorino pods</li>
+<li><strong>vLLM Models</strong>: Scrapes metrics from vLLM simulator and model services</li>
+<li><strong>MaaS API</strong>: Scrapes metrics from MaaS API services</li>
+</ul>
+<p>These ServiceMonitors are deployed in the <code>maas-api</code> namespace and use <code>namespaceSelector</code> to discover services in other namespaces (e.g., <code>kuadrant-system</code>, <code>llm</code>).</p>
+<p><strong>Manual ServiceMonitor Creation (Advanced):</strong></p>
+<p>If you need to create additional ServiceMonitors for custom services, use the following template:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">monitoring.coreos.com/v1</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ServiceMonitor</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">limitador-monitor</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">monitoring</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">      </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">limitador</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="nt">endpoints</span><span class="p">:</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">metrics</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10s</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/metrics</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-service-monitor</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-api</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-app</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">      </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-service</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="nt">endpoints</span><span class="p">:</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/metrics</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="nt">namespaceSelector</span><span class="p">:</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="nt">matchNames</span><span class="p">:</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-namespace</span>
 </code></pre></div>
 <h2 id="high-availability-for-maas-metrics">High Availability for MaaS Metrics</h2>
 <p>For production deployments where metric persistence across pod restarts and scaling events is critical, you should configure Limitador to use Redis as a backend storage solution.</p>
@@ -2069,11 +2085,16 @@
 <ol>
 <li><strong>Grafana Operator</strong>: Installed automatically if not present</li>
 <li><strong>Grafana Instance</strong>: Deployed to the target namespace</li>
-<li><strong>Prometheus Datasource</strong>: Configured with authentication token</li>
+<li><strong>Prometheus Datasource</strong>: Configured with authentication token (connects to OpenShift platform Prometheus)</li>
+<li><strong>ServiceMonitors</strong>: Automatically deployed during main deployment to configure metric scraping</li>
 <li><strong>Dashboards</strong>:</li>
 <li>Platform Admin Dashboard</li>
 <li>AI Engineer Dashboard</li>
 </ol>
+<div class="admonition note">
+<p class="admonition-title">ServiceMonitors Deployment</p>
+<p>ServiceMonitors are deployed automatically in step 14 of <code>deploy-openshift.sh</code>, even if the observability stack (Grafana) is not installed. This ensures that OpenShift's Prometheus can collect metrics from MaaS components regardless of whether Grafana is installed.</p>
+</div>
 <h3 id="accessing-grafana">Accessing Grafana</h3>
 <p>After installation, get the Grafana URL:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Get the route</span>
@@ -2089,10 +2110,16 @@
 <p>Change the default Grafana credentials immediately after first login. The credentials are stored in the Grafana instance manifest and should be updated for production deployments.</p>
 </div>
 <h3 id="grafana-datasource-configuration">Grafana Datasource Configuration</h3>
-<p>The Prometheus datasource is automatically configured with:
-- <strong>URL</strong>: <code>https://thanos-querier.openshift-monitoring.svc.cluster.local:9091</code>
-- <strong>Authentication</strong>: Bearer token from OpenShift service account
-- <strong>TLS</strong>: Skip verification (internal cluster communication)</p>
+<p>The Prometheus datasource is automatically configured to connect to OpenShift's platform Prometheus:</p>
+<ul>
+<li><strong>URL</strong>: <code>https://thanos-querier.openshift-monitoring.svc.cluster.local:9091</code></li>
+<li><strong>Authentication</strong>: Bearer token from OpenShift service account</li>
+<li><strong>TLS</strong>: Skip verification (internal cluster communication)</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">OpenShift Platform Prometheus</p>
+<p>On OpenShift clusters, the platform provides Prometheus in the <code>openshift-monitoring</code> namespace. The MaaS Platform does not deploy a custom Prometheus instance. Instead, ServiceMonitors are used to configure the platform Prometheus to scrape metrics from MaaS components.</p>
+</div>
 <p>The datasource is created dynamically by <code>install-observability.sh</code> with proper token injection. A static datasource manifest is not used to ensure authentication tokens are properly configured.</p>
 <h2 id="grafana-dashboards">Grafana Dashboards</h2>
 <h3 id="available-dashboards">Available Dashboards</h3>
@@ -2139,7 +2166,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="December 23, 2025 16:17:29 UTC">December 23, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="December 23, 2025 16:23:33 UTC">December 23, 2025</span>
   </span>
 
     
