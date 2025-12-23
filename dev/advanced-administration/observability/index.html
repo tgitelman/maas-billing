@@ -1400,6 +1400,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#installing-the-observability-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installing the Observability Stack
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Installing the Observability Stack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#during-main-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        During Main Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#standalone-installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standalone Installation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-installed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Gets Installed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accessing-grafana" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Accessing Grafana
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grafana-datasource-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grafana Datasource Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#grafana-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1412,10 +1484,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#maas-platform-overview-dashboard" class="md-nav__link">
+  <a href="#available-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        MaaS Platform Overview Dashboard
+        Available Dashboards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-dashboard-import" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Dashboard Import
       
     </span>
   </a>
@@ -1751,6 +1834,78 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#installing-the-observability-stack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installing the Observability Stack
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Installing the Observability Stack">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#during-main-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        During Main Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#standalone-installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Standalone Installation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-gets-installed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What Gets Installed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#accessing-grafana" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Accessing Grafana
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grafana-datasource-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Grafana Datasource Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#grafana-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1763,10 +1918,21 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#maas-platform-overview-dashboard" class="md-nav__link">
+  <a href="#available-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        MaaS Platform Overview Dashboard
+        Available Dashboards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-dashboard-import" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Manual Dashboard Import
       
     </span>
   </a>
@@ -1876,14 +2042,81 @@
 <li>Production-ready setup instructions</li>
 </ul>
 <p>For local development and testing, you can also use our <a href="../limitador-persistence/">Limitador Persistence</a> guide which includes a basic Redis setup script that works with any Kubernetes cluster.</p>
+<h2 id="installing-the-observability-stack">Installing the Observability Stack</h2>
+<p>The observability stack can be installed during the main deployment or separately.</p>
+<h3 id="during-main-deployment">During Main Deployment</h3>
+<p>When running <code>deploy-openshift.sh</code>, you'll be prompted to install the observability stack:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./scripts/deploy-openshift.sh
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># When prompted, answer &#39;y&#39; to install observability</span>
+</code></pre></div>
+<p>Or use flags to control installation:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Install with observability</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>./scripts/deploy-openshift.sh<span class="w"> </span>--with-observability
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Skip observability installation</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>./scripts/deploy-openshift.sh<span class="w"> </span>--skip-observability
+</code></pre></div>
+<h3 id="standalone-installation">Standalone Installation</h3>
+<p>To install the observability stack separately:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Install to default namespace (maas-api)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./scripts/install-observability.sh
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Install to custom namespace</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>./scripts/install-observability.sh<span class="w"> </span>--namespace<span class="w"> </span>my-namespace
+</code></pre></div>
+<h3 id="what-gets-installed">What Gets Installed</h3>
+<p>The observability stack includes:</p>
+<ol>
+<li><strong>Grafana Operator</strong>: Installed automatically if not present</li>
+<li><strong>Grafana Instance</strong>: Deployed to the target namespace</li>
+<li><strong>Prometheus Datasource</strong>: Configured with authentication token</li>
+<li><strong>Dashboards</strong>:</li>
+<li>Platform Admin Dashboard</li>
+<li>AI Engineer Dashboard</li>
+</ol>
+<h3 id="accessing-grafana">Accessing Grafana</h3>
+<p>After installation, get the Grafana URL:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Get the route</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>route<span class="w"> </span>grafana-ingress<span class="w"> </span>-n<span class="w"> </span>maas-api<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.host}&#39;</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Access at: https://&lt;route-host&gt;</span>
+</code></pre></div>
+<p><strong>Default Credentials:</strong>
+- Username: <code>admin</code>
+- Password: <code>admin</code></p>
+<div class="admonition warning">
+<p class="admonition-title">Security</p>
+<p>Change the default Grafana credentials immediately after first login. The credentials are stored in the Grafana instance manifest and should be updated for production deployments.</p>
+</div>
+<h3 id="grafana-datasource-configuration">Grafana Datasource Configuration</h3>
+<p>The Prometheus datasource is automatically configured with:
+- <strong>URL</strong>: <code>https://thanos-querier.openshift-monitoring.svc.cluster.local:9091</code>
+- <strong>Authentication</strong>: Bearer token from OpenShift service account
+- <strong>TLS</strong>: Skip verification (internal cluster communication)</p>
+<p>The datasource is created dynamically by <code>install-observability.sh</code> with proper token injection. A static datasource manifest is not used to ensure authentication tokens are properly configured.</p>
 <h2 id="grafana-dashboards">Grafana Dashboards</h2>
-<h3 id="maas-platform-overview-dashboard">MaaS Platform Overview Dashboard</h3>
-<p>We are providing a basic dashboard for the MaaS Platform that can be used to get a quick
-overview of the system. Its definition can be found and imported from the following 
-link:
-<a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json">maas-token-metrics-dashboard.json</a></p>
-<p>See more detailed description of the Grafana Dashboard in <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/dashboards">its README of the 
-repository</a>.</p>
+<h3 id="available-dashboards">Available Dashboards</h3>
+<p>The observability stack includes two pre-configured dashboards:</p>
+<ol>
+<li><strong>Platform Admin Dashboard</strong>: Overview of system-wide metrics, usage patterns, and health</li>
+<li><strong>AI Engineer Dashboard</strong>: Model-specific metrics, token usage, and performance</li>
+</ol>
+<h3 id="manual-dashboard-import">Manual Dashboard Import</h3>
+<p>You can also manually import dashboard JSON files:</p>
+<ol>
+<li><strong>Import into Grafana:</strong></li>
+<li>Go to Grafana → Dashboards → Import</li>
+<li>
+<p>Upload the JSON file or paste the URL</p>
+</li>
+<li>
+<p><strong>Available Dashboards:</strong></p>
+</li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/platform-admin-dashboard.json">Platform Admin Dashboard</a></li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/ai-engineer-dashboard.json">AI Engineer Dashboard</a></li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json">MaaS Token Metrics Dashboard</a></li>
+</ol>
+<p>See more detailed description of the Grafana Dashboards in <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/dashboards">its README of the repository</a>.</p>
 
 
 
@@ -1906,7 +2139,7 @@ repository</a>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="December 15, 2025 10:20:14 UTC">December 15, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="December 23, 2025 16:17:29 UTC">December 23, 2025</span>
   </span>
 
     
