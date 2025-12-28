@@ -186,13 +186,14 @@ kubectl wait --for=condition=Ready pods -l app=grafana -n "$NAMESPACE" --timeout
 echo ""
 echo "6️⃣ Configuring Prometheus datasource..."
 
-# Get authentication token
-TOKEN=$(oc whoami -t 2>/dev/null || kubectl create token default -n "$NAMESPACE" --duration=8760h 2>/dev/null || echo "")
+# Get authentication token from grafana-sa ServiceAccount (long-lived, 1 year)
+# Using grafana-sa ensures the token has cluster-monitoring-view permissions
+TOKEN=$(kubectl create token grafana-sa -n "$NAMESPACE" --duration=8760h 2>/dev/null || echo "")
 
 if [ -z "$TOKEN" ]; then
-    echo "   ⚠️  Could not get authentication token"
+    echo "   ⚠️  Could not create token for grafana-sa ServiceAccount"
     echo "   Deploying datasource without authentication (Prometheus queries may fail)..."
-    echo "   To fix later, run: oc whoami -t  # Get token, then update GrafanaDatasource"
+    echo "   To fix later, run: kubectl create token grafana-sa -n $NAMESPACE --duration=8760h"
     # Deploy without auth - user will need to manually configure later
     cat <<EOF | kubectl apply -f -
 apiVersion: grafana.integreatly.org/v1beta1

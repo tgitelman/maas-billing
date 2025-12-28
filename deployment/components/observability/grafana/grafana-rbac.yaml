@@ -1,5 +1,15 @@
 # RBAC for Grafana to access Prometheus/Thanos metrics
 ---
+# ServiceAccount for Grafana (also created by operator, but explicit is better)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana-sa
+  namespace: maas-api
+  labels:
+    app: grafana
+    component: observability
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
