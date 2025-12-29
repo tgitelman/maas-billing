@@ -90,8 +90,9 @@ histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) 
 # Total model requests (scales with dashboard time range)
 sum(increase(vllm:e2e_request_latency_seconds_count[$__range]))
 
-# Token throughput (requires real vLLM/llm-d)
-sum(rate(vllm:prompt_tokens_total[5m]))  # Prompt tokens/s
+# Token throughput (works with both real vLLM and simulator)
+# Uses OR to support both metric naming conventions
+sum(rate(vllm:prompt_tokens_total[5m])) or sum(rate(vllm:request_prompt_tokens_sum[5m]))  # Prompt tokens/s
 sum(rate(vllm:generation_tokens_total[5m]))  # Generation tokens/s
 
 # Resource allocation per model pod (CPU requests/limits)
@@ -131,7 +132,7 @@ sum by (user) (rate(limited_calls[5m]))
 | **📈 Traffic Analysis** | Request rate by model, Overall error rate (4xx/5xx/rate-limited), Request rate by tier, P95 latency by service |
 | **🏆 Top Users** | Top 10 by hits, Top 10 by declined requests |
 | **🤖 Model Metrics** | Requests running, Requests waiting, GPU cache usage, Total requests, Model queue depth, Model inference latency (P50/P95/P99) |
-| **🔤 Token Metrics** | Tokens (1h), Token throughput (requires vLLM/llm-d) |
+| **🔤 Token Metrics** | Tokens (1h), Token throughput (works with simulator and real vLLM) |
 | **📦 Resource Allocation** | Resource allocation per model table (CPU/Memory requests/limits) |
 | **👤 User Tracking** | Requests & errors per user (authorized vs rate-limited) |
 | **📋 Detailed Breakdown** | Request rate by user, Request volume by user/model/tier |
@@ -151,7 +152,7 @@ sum by (user) (rate(limited_calls[5m]))
 - ✅ Model selector dropdown to filter model metrics
 - ✅ **Resource allocation per model** - CPU/Memory requests/limits from kube-state-metrics
 - ✅ **Requests & errors per user** - authorized vs rate-limited from Limitador
-- ⚠️ Token metrics (prompt/generation tokens) require real vLLM/llm-d deployment (simulator doesn't expose them)
+- ✅ Token metrics work with both real vLLM (`vllm:prompt_tokens_total`) and simulator (`vllm:request_prompt_tokens_sum`) - dashboards use `OR` queries for compatibility
 - ⚠️ Model latency histograms only appear after traffic is generated (lazy-initialized)
 - ❌ **Latency per user** - Blocked: Istio metrics don't include `user` label (requires EnvoyFilter)
 - ❌ **Token consumption per user** - Blocked: vLLM doesn't label metrics with `user` (requires vLLM changes)

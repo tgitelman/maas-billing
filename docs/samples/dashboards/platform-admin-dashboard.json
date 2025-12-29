@@ -1510,7 +1510,7 @@
       "id": 27,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "11.3.0",
-      "targets": [{"expr": "sum(increase(vllm:prompt_tokens_total{model_name=~\"$model\"}[1h])) + sum(increase(vllm:generation_tokens_total{model_name=~\"$model\"}[1h]))", "instant": true, "refId": "A"}],
+      "targets": [{"expr": "(sum(increase(vllm:prompt_tokens_total{model_name=~\"$model\"}[1h])) + sum(increase(vllm:generation_tokens_total{model_name=~\"$model\"}[1h]))) or (sum(increase(vllm:request_prompt_tokens_sum{model_name=~\"$model\"}[1h])) + sum(increase(vllm:request_generation_tokens_sum{model_name=~\"$model\"}[1h])))", "instant": true, "refId": "A"}],
       "title": "🔤 Tokens (1h)",
       "type": "stat"
     },
@@ -1532,8 +1532,8 @@
       "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "pluginVersion": "11.3.0",
       "targets": [
-        {"expr": "sum(rate(vllm:prompt_tokens_total{model_name=~\"$model\"}[5m]))", "legendFormat": "Prompt tokens/s", "refId": "A"},
-        {"expr": "sum(rate(vllm:generation_tokens_total{model_name=~\"$model\"}[5m]))", "legendFormat": "Generation tokens/s", "refId": "B"}
+        {"expr": "sum(rate(vllm:prompt_tokens_total{model_name=~\"$model\"}[5m])) or sum(rate(vllm:request_prompt_tokens_sum{model_name=~\"$model\"}[5m]))", "legendFormat": "Prompt tokens/s", "refId": "A"},
+        {"expr": "sum(rate(vllm:generation_tokens_total{model_name=~\"$model\"}[5m])) or sum(rate(vllm:request_generation_tokens_sum{model_name=~\"$model\"}[5m]))", "legendFormat": "Generation tokens/s", "refId": "B"}
       ],
       "title": "🔤 Token Throughput",
       "type": "timeseries"

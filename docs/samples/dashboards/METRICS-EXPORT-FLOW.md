@@ -119,7 +119,7 @@ limited_calls{model="facebook-opt-125m-simulated",user="tgitelma-redhat-com-dd26
 
 - KServe model pods expose vLLM-compatible metrics on port 8000 (HTTPS)
 - ServiceMonitor `kserve-llm-models` scrapes all pods with label `app.kubernetes.io/part-of: llminferenceservice`
-- Provides queue depth, GPU cache usage, latency histograms; token metrics require real vLLM
+- Provides queue depth, GPU cache usage, latency histograms, and token histograms
 
 **Key Metrics:**
 - `vllm:num_requests_running` - Requests currently being processed
@@ -130,7 +130,15 @@ limited_calls{model="facebook-opt-125m-simulated",user="tgitelma-redhat-com-dd26
 
 **Note**: Latency histogram metrics are **lazy-initialized** and only appear after traffic is generated.
 
-**Status**: ✅ Queue depth and latency histograms available, ⚠️ Token metrics require real vLLM deployment
+**Token Metric Compatibility:**
+| Metric Type | Real vLLM | Simulator |
+| ----------- | --------- | --------- |
+| Prompt tokens | `vllm:prompt_tokens_total` | `vllm:request_prompt_tokens_sum` |
+| Generation tokens | `vllm:generation_tokens_total` | `vllm:request_generation_tokens_sum` |
+
+Dashboard queries use `OR` operator to support both naming conventions automatically.
+
+**Status**: ✅ Queue depth, latency histograms, and token metrics all available
 
 ---
 
@@ -143,7 +151,7 @@ limited_calls{model="facebook-opt-125m-simulated",user="tgitelma-redhat-com-dd26
 | **Istio Gateway** | ✅ Yes (HTTP metrics, histograms) | ✅ `destination_service_name`, `response_code` | ✅ Working |
 | **Authorino** | ✅ Yes (operator metrics only) | ❌ No auth request metrics | ⚠️ Limited |
 | **Limitador** | ✅ Yes | ✅ Yes - exports all labels | ✅ Working |
-| **vLLM/KServe** | ✅ Yes (queue, GPU cache, latency histograms) | ✅ `model_name` | ✅ Working (tokens need real vLLM) |
+| **vLLM/KServe** | ✅ Yes (queue, GPU cache, latency, tokens) | ✅ `model_name` | ✅ Fully Working |
 | **HAProxy** | ✅ Yes (HTTP routes only) | ❌ No (route-level only) | ⚠️ TCP passthrough = 0ms |
 | **Prometheus** | ❌ No | ❌ No | ✅ Working |
 
@@ -175,7 +183,7 @@ limited_calls{model="facebook-opt-125m-simulated",user="tgitelma-redhat-com-dd26
 |-----------------|-----|------------|
 | **Latency per API Key/User** | Istio metrics don't include user labels | Would need custom Envoy filter |
 | **Model Resource Allocation** | CPU/GPU/Memory per model | RHOAIENG-12528 - Resource metrics |
-| **Per-Request Token Counts** | Token counts not exposed by simulators | Requires real vLLM (not simulator) |
+| ~~Per-Request Token Counts~~ | ~~Token counts not exposed by simulators~~ | ✅ RESOLVED - Simulator exposes `vllm:request_*_tokens_sum` |
 
 **Resolved:**
 - ✅ **Model Inference Latency** - Available via `vllm:e2e_request_latency_seconds` (P50/P95/P99)

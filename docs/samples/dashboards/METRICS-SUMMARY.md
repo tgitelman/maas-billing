@@ -125,12 +125,23 @@ count(kube_pod_status_phase{namespace="openshift-ingress", pod=~"maas.*", phase=
 | `vllm:gpu_cache_usage_perc` | vLLM/Simulator | `model_name` | ✅ Available - GPU cache utilization |
 | `vllm:e2e_request_latency_seconds` | vLLM/Simulator (v0.6.1+) | `model_name` | ✅ Available - histogram of end-to-end request latency |
 | `vllm:request_inference_time_seconds` | vLLM/Simulator (v0.6.1+) | `model_name` | ✅ Available - histogram of inference processing time |
-| `vllm:prompt_tokens_total` | vLLM (real only) | `model_name` | ⚠️ Requires real vLLM deployment |
-| `vllm:generation_tokens_total` | vLLM (real only) | `model_name` | ⚠️ Requires real vLLM deployment |
+| `vllm:prompt_tokens_total` | vLLM (real only) | `model_name` | ✅ Counter - total prompt tokens (real vLLM) |
+| `vllm:generation_tokens_total` | vLLM (real only) | `model_name` | ✅ Counter - total generation tokens (real vLLM) |
+| `vllm:request_prompt_tokens_sum` | vLLM/Simulator | `model_name` | ✅ Histogram sum - prompt tokens per request |
+| `vllm:request_generation_tokens_sum` | vLLM/Simulator | `model_name` | ✅ Histogram sum - generation tokens per request |
 
 **Note**: Metrics are scraped via ServiceMonitor `kserve-llm-models` which targets all services with label `app.kubernetes.io/part-of: llminferenceservice`. 
 
-**Important**: Latency histogram metrics (`vllm:e2e_request_latency_seconds`, `vllm:request_inference_time_seconds`) only appear **after traffic is generated** - they are lazy-initialized. The simulator (v0.6.1+) exposes queue depth, GPU cache, and latency histograms. Token consumption metrics require a real vLLM deployment.
+**⚠️ Token Metric Name Differences:**
+
+| Metric Type | Real vLLM | Simulator | Dashboard Query |
+| ----------- | --------- | --------- | --------------- |
+| Prompt tokens | `vllm:prompt_tokens_total` | `vllm:request_prompt_tokens_sum` | Uses `OR` to support both |
+| Generation tokens | `vllm:generation_tokens_total` | `vllm:request_generation_tokens_sum` | Uses `OR` to support both |
+
+The dashboard token panels use PromQL `OR` operator to automatically work with **both** real vLLM and the simulator.
+
+**Important**: Latency histogram metrics (`vllm:e2e_request_latency_seconds`, `vllm:request_inference_time_seconds`) only appear **after traffic is generated** - they are lazy-initialized. The simulator (v0.6.1+) exposes queue depth, GPU cache, latency histograms, and token histograms.
 
 ---
 
