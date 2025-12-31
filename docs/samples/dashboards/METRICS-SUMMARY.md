@@ -122,13 +122,18 @@ count(kube_pod_status_phase{namespace="openshift-ingress", pod=~"maas.*", phase=
 | ------ | ------ | ---------------- | ----- |
 | `vllm:num_requests_running` | vLLM/Simulator | `model_name` | ✅ Available - requests currently processing |
 | `vllm:num_requests_waiting` | vLLM/Simulator | `model_name` | ✅ Available - requests in queue |
-| `vllm:gpu_cache_usage_perc` | vLLM/Simulator | `model_name` | ✅ Available - GPU cache utilization |
+| `vllm:gpu_cache_usage_perc` | vLLM/Simulator | `model_name` | ✅ Available - GPU KV-cache utilization (0-1) |
 | `vllm:e2e_request_latency_seconds` | vLLM/Simulator (v0.6.1+) | `model_name` | ✅ Available - histogram of end-to-end request latency |
+| `vllm:time_to_first_token_seconds` | vLLM/Simulator (v0.6.1+) | `model_name` | ✅ **NEW** - TTFT histogram (critical for streaming UX) |
+| `vllm:time_per_output_token_seconds` | vLLM/Simulator (v0.6.1+) | `model_name` | ✅ **NEW** - ITL histogram (inter-token latency) |
+| `vllm:request_prefill_time_seconds` | vLLM/Simulator (v0.6.1+) | `model_name` | ✅ Available - time in PREFILL phase |
+| `vllm:request_decode_time_seconds` | vLLM/Simulator (v0.6.1+) | `model_name` | ✅ Available - time in DECODE phase |
 | `vllm:request_inference_time_seconds` | vLLM/Simulator (v0.6.1+) | `model_name` | ✅ Available - histogram of inference processing time |
 | `vllm:prompt_tokens_total` | vLLM (real only) | `model_name` | ✅ Counter - total prompt tokens (real vLLM) |
 | `vllm:generation_tokens_total` | vLLM (real only) | `model_name` | ✅ Counter - total generation tokens (real vLLM) |
 | `vllm:request_prompt_tokens_sum` | vLLM/Simulator | `model_name` | ✅ Histogram sum - prompt tokens per request |
 | `vllm:request_generation_tokens_sum` | vLLM/Simulator | `model_name` | ✅ Histogram sum - generation tokens per request |
+| `vllm:request_success_total` | vLLM/Simulator | `model_name`, `finish_reason` | ✅ Available - success counter by finish reason |
 
 **Note**: Metrics are scraped via ServiceMonitor `kserve-llm-models` which targets all services with label `app.kubernetes.io/part-of: llminferenceservice`. 
 
@@ -141,7 +146,26 @@ count(kube_pod_status_phase{namespace="openshift-ingress", pod=~"maas.*", phase=
 
 The dashboard token panels use PromQL `OR` operator to automatically work with **both** real vLLM and the simulator.
 
-**Important**: Latency histogram metrics (`vllm:e2e_request_latency_seconds`, `vllm:request_inference_time_seconds`) only appear **after traffic is generated** - they are lazy-initialized. The simulator (v0.6.1+) exposes queue depth, GPU cache, latency histograms, and token histograms.
+**LLM-Specific Latency Queries:**
+
+```promql
+# Time to First Token (TTFT) - P50
+histogram_quantile(0.5, sum(rate(vllm:time_to_first_token_seconds_bucket[5m])) by (le, model_name))
+
+# Time to First Token (TTFT) - P95
+histogram_quantile(0.95, sum(rate(vllm:time_to_first_token_seconds_bucket[5m])) by (le, model_name))
+
+# Inter-Token Latency (ITL) - P50
+histogram_quantile(0.5, sum(rate(vllm:time_per_output_token_seconds_bucket[5m])) by (le, model_name))
+
+# Inter-Token Latency (ITL) - P95
+histogram_quantile(0.95, sum(rate(vllm:time_per_output_token_seconds_bucket[5m])) by (le, model_name))
+
+# End-to-End Latency - P95
+histogram_quantile(0.95, sum(rate(vllm:e2e_request_latency_seconds_bucket[5m])) by (le, model_name))
+```
+
+**Important**: Latency histogram metrics (`vllm:e2e_request_latency_seconds`, `vllm:time_to_first_token_seconds`, `vllm:time_per_output_token_seconds`) only appear **after traffic is generated** - they are lazy-initialized. The simulator (v0.6.1+) exposes all these metrics.
 
 ---
 

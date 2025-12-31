@@ -29,6 +29,7 @@ spec:
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "sum(authorized_hits{user=~\"^$user$\"})", "instant": true, "refId": "A"}],
+          "description": "Total API requests you have made that were successfully authorized.",
           "title": "📊 My Total Requests",
           "type": "stat"
         },
@@ -40,6 +41,7 @@ spec:
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "sum(rate(authorized_hits{user=~\"^$user$\"}[5m]))", "instant": true, "refId": "A"}],
+          "description": "Your current request rate (requests per second) averaged over the last 5 minutes.",
           "title": "⚡ Current Rate (5m avg)",
           "type": "stat"
         },
@@ -51,6 +53,7 @@ spec:
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "sum(limited_calls{user=~\"^$user$\"}) OR vector(0)", "instant": true, "refId": "A"}],
+          "description": "Total requests that were rejected due to rate limiting. Consider upgrading your tier if this is high.",
           "title": "❌ Total Rate Limited Requests",
           "type": "stat"
         },
@@ -62,6 +65,7 @@ spec:
           "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true, "text": {}},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "(sum(authorized_hits{user=~\"^$user$\"}) / (sum(authorized_hits{user=~\"^$user$\"}) + sum(limited_calls{user=~\"^$user$\"}))) OR vector(1)", "instant": true, "refId": "A"}],
+          "description": "Percentage of your requests that were successful. < 95% indicates you may be hitting rate limits frequently.",
           "title": "✅ My Success Rate",
           "type": "gauge"
         },
@@ -74,6 +78,7 @@ spec:
           "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "sum by (model) (authorized_hits{user=~\"^$user$\"})", "legendFormat": "{{model}}", "refId": "A"}],
+          "description": "Your request count broken down by model. Shows which models you use most frequently.",
           "title": "📈 Usage by Model",
           "type": "timeseries"
         },
@@ -85,6 +90,7 @@ spec:
           "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "sum(rate(authorized_hits{user=~\"^$user$\"}[5m]))", "legendFormat": "Authorized", "refId": "A"}, {"expr": "sum(rate(limited_calls{user=~\"^$user$\"}[5m]))", "legendFormat": "Rate Limited", "refId": "B"}],
+          "description": "Your request rate over time, showing successful vs rate-limited requests. Use this to identify when you hit rate limits.",
           "title": "📊 Request Trends (Successful vs Rate Limited Requests)",
           "type": "timeseries"
         },
