@@ -630,7 +630,7 @@
       "pluginVersion": "11.3.0",
       "targets": [
         {
-          "expr": "sum(authorized_calls) / (sum(authorized_calls) + sum(limited_calls))",
+          "expr": "sum(authorized_hits) / (sum(authorized_hits) + sum(limited_calls))",
           "instant": true,
           "refId": "A"
         }

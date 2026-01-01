@@ -32,7 +32,7 @@ This directory contains Grafana dashboard samples for the MaaS platform.
 
 **Verified on cluster:**
 
-```
+```text
 authorized_hits{model="facebook-opt-125m-simulated",tier="free",user="tgitelma-redhat-com-dd264a84",...} 376
 istio_requests_total{response_code="200",destination_service_name="facebook-opt-125m-simulated-kserve-workload-svc",...} 55
 ```

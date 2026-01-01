@@ -330,7 +330,7 @@ if kubectl get namespace llm &>/dev/null; then
     if [ "$LLM_SERVICES" -gt 0 ] && [ "$LLM_PODS" -gt 0 ]; then
         print_success "Found $LLM_SERVICES LLMInferenceService(s) with $LLM_PODS running pod(s)"
     elif [ "$LLM_SERVICES" -gt 0 ] && [ "$LLM_PODS" -eq 0 ]; then
-        print_failure "Found $LLM_SERVICES LLMInferenceService(s) but 0 running pods" "Model pods are not running (likely Pending due to resource constraints)" "Check: kubectl describe pods -n llm | grep -A5 Events"
+        print_fail "Found $LLM_SERVICES LLMInferenceService(s) but 0 running pods" "Model pods are not running (likely Pending due to resource constraints)" "Check: kubectl describe pods -n llm | grep -A5 Events"
     else
         print_warning "Models endpoint accessible but no models found" "You may need to deploy a model a simulated model can be deployed with the following command:" "kustomize build docs/samples/models/simulator | kubectl apply --server-side=true --force-conflicts -f -"
     fi

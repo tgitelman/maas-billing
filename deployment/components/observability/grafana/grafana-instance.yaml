@@ -12,7 +12,12 @@ spec:
     log:
       mode: console
     security:
-      # Default credentials - change after first login
+      # WARNING: Default credentials for initial setup only.
+      # Change immediately after first login or configure OAuth integration.
+      # For production, consider using a Kubernetes Secret:
+      #   kubectl create secret generic grafana-admin-credentials \
+      #     --from-literal=admin-user=admin --from-literal=admin-password=<secure-password>
+      # Then reference the secret in the Grafana CR's deployment spec.
       admin_user: admin
       admin_password: admin
   deployment:

@@ -79,6 +79,18 @@ EOF
     sleep 5
   done
 
+  # Verify CSV actually succeeded (fail explicitly if it didn't)
+  CSV_NAME=$(kubectl get csv -n openshift-operators --no-headers 2>/dev/null | grep -i grafana | awk '{print $1}' | head -1 || true)
+  if [ -z "$CSV_NAME" ]; then
+    echo "❌ Grafana CSV not found after waiting"
+    exit 1
+  fi
+  PHASE=$(kubectl get csv -n openshift-operators "$CSV_NAME" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  if [ "$PHASE" != "Succeeded" ]; then
+    echo "❌ Grafana CSV phase is '$PHASE', expected 'Succeeded'"
+    exit 1
+  fi
+
   # Wait for any grafana operator deployment to be available
   echo "⏳ Waiting for Grafana operator deployment..."
   DEPLOY_NAME=$(kubectl get deployment -n openshift-operators --no-headers 2>/dev/null | grep -i grafana | awk '{print $1}' | head -1 || true)

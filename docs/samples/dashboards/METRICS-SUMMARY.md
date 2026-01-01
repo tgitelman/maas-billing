@@ -389,11 +389,12 @@ With Istio gateway metrics now scraped, we have:
 ## 🔗 Related Files
 
 - **TelemetryPolicy**: `deployment/base/observability/telemetry-policy.yaml`
-- **ServiceMonitor**: `deployment/base/observability/servicemonitor.yaml`
+- **ServiceMonitors**: `deployment/base/observability/prometheus-servicemonitors.yaml`
+- **LLM Models ServiceMonitor**: `deployment/components/observability/monitors/kserve-llm-models-servicemonitor.yaml`
 - **Platform Admin Dashboard JSON**: `docs/samples/dashboards/platform-admin-dashboard.json`
 - **AI Engineer Dashboard JSON**: `docs/samples/dashboards/ai-engineer-dashboard.json`
 - **Token Metrics Dashboard JSON**: `docs/samples/dashboards/maas-token-metrics-dashboard.json`
-- **Deployment Script**: `deployment/scripts/observability/deploy-openshift-observability.sh`
+- **Install Script**: `scripts/install-observability.sh`
 
 ### GitOps Dashboard Installation (Persistent)
 
