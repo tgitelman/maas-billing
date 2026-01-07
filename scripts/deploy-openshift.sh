@@ -6,8 +6,9 @@
 # Usage: ./deploy-openshift.sh [OPTIONS]
 #
 # Options:
-#   --with-observability     Install observability stack (Grafana + dashboards)
+#   --with-observability     Install observability stack (prompts for stack choice)
 #   --skip-observability     Skip observability installation (no prompt)
+#   --observability-stack    Stack to install: grafana, perses, or both
 #   --namespace NAMESPACE    MaaS API namespace (default: maas-api)
 #   -h, --help               Show this help message
 
@@ -15,22 +16,27 @@ set -e
 
 # Parse command line arguments
 INSTALL_OBSERVABILITY=""  # Empty = prompt, set by flags
+OBSERVABILITY_STACK=""    # Empty = prompt if installing
 MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-maas-api}"
 
 show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --with-observability     Install observability stack (Grafana + dashboards)"
-    echo "  --skip-observability     Skip observability installation (no prompt)"
-    echo "  --namespace NAMESPACE    MaaS API namespace (default: maas-api)"
-    echo "  -h, --help               Show this help message"
+    echo "  --with-observability              Install observability stack (prompts for stack)"
+    echo "  --skip-observability              Skip observability installation (no prompt)"
+    echo "  --observability-stack STACK       Stack to install: grafana, perses, or both"
+    echo "  --namespace NAMESPACE             MaaS API namespace (default: maas-api)"
+    echo "  -h, --help                        Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0                           # Interactive mode, prompts for observability"
-    echo "  $0 --with-observability      # Install with observability"
-    echo "  $0 --skip-observability      # Install without observability"
-    echo "  $0 --namespace my-namespace  # Use custom namespace"
+    echo "  $0                                          # Interactive mode"
+    echo "  $0 --with-observability                     # Install, prompt for stack choice"
+    echo "  $0 --with-observability --observability-stack grafana   # Install Grafana"
+    echo "  $0 --with-observability --observability-stack perses    # Install Perses"
+    echo "  $0 --with-observability --observability-stack both      # Install both"
+    echo "  $0 --skip-observability                     # Install without observability"
+    echo "  $0 --namespace my-namespace                 # Use custom namespace"
     echo ""
     exit 0
 }
@@ -44,6 +50,24 @@ while [[ $# -gt 0 ]]; do
         --skip-observability)
             INSTALL_OBSERVABILITY="n"
             shift
+            ;;
+        --observability-stack)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: --observability-stack requires a value (grafana, perses, or both)"
+                echo "Use --help for usage information"
+                exit 1
+            fi
+            case "$2" in
+                grafana|perses|both)
+                    OBSERVABILITY_STACK="$2"
+                    ;;
+                *)
+                    echo "Error: --observability-stack must be 'grafana', 'perses', or 'both'"
+                    echo "Use --help for usage information"
+                    exit 1
+                    ;;
+            esac
+            shift 2
             ;;
         --namespace|-n)
             if [[ -z "$2" || "$2" == -* ]]; then
@@ -1042,26 +1066,63 @@ echo "📊 Observability Stack"
 echo "========================================="
 echo ""
 
+# Helper function to prompt for stack selection
+select_observability_stack() {
+    while true; do
+        echo "" >&2
+        echo "Select observability stack to install:" >&2
+        echo "  1) grafana  - Grafana dashboards (established, feature-rich)" >&2
+        echo "  2) perses   - Perses dashboards (CNCF native, lightweight)" >&2
+        echo "  3) both     - Install both visualization platforms" >&2
+        echo "" >&2
+        read -p "Enter choice [1-3]: " choice
+        
+        case "$choice" in
+            1|grafana)  echo "grafana"; return ;;
+            2|perses)   echo "perses"; return ;;
+            3|both)     echo "both"; return ;;
+            "")         echo "⚠️  Please enter a valid choice (1, 2, or 3)" >&2 ;;
+            *)          echo "⚠️  Invalid choice '$choice'. Please enter 1, 2, or 3" >&2 ;;
+        esac
+    done
+}
+
 # Check if flag was provided
 if [ "$INSTALL_OBSERVABILITY" = "y" ]; then
     echo "Installing observability stack..."
-    "$SCRIPT_DIR/install-observability.sh" --namespace "$MAAS_API_NAMESPACE"
+    
+    # If stack specified via flag, use it; otherwise prompt
+    if [ -n "$OBSERVABILITY_STACK" ]; then
+        "$SCRIPT_DIR/install-observability.sh" --namespace "$MAAS_API_NAMESPACE" --stack "$OBSERVABILITY_STACK"
+    elif [ -t 0 ]; then
+        OBSERVABILITY_STACK=$(select_observability_stack)
+        "$SCRIPT_DIR/install-observability.sh" --namespace "$MAAS_API_NAMESPACE" --stack "$OBSERVABILITY_STACK"
+    else
+        echo "Non-interactive mode: --observability-stack not specified. Defaulting to 'grafana'"
+        "$SCRIPT_DIR/install-observability.sh" --namespace "$MAAS_API_NAMESPACE" --stack grafana
+    fi
 elif [ "$INSTALL_OBSERVABILITY" = "n" ]; then
     echo "⏭️  Skipping observability installation"
     echo "   To install later, from project root run: ./scripts/install-observability.sh --namespace $MAAS_API_NAMESPACE"
 else
     # No flag - prompt if interactive
-    echo "Would you like to install the observability stack (Grafana + dashboards)?"
-    echo "This includes:"
-    echo "  - Grafana instance with Prometheus datasource"
-    echo "  - Platform Admin Dashboard"
-    echo "  - AI Engineer Dashboard"
+    echo "Would you like to install the observability stack?"
+    echo "Available options:"
+    echo "  - Grafana: established, feature-rich dashboards"
+    echo "  - Perses: CNCF native, lightweight dashboards"
+    echo "  - Both: install both visualization platforms"
+    echo ""
+    echo "Includes: Platform Admin Dashboard, AI Engineer Dashboard"
     echo ""
 
     if [ -t 0 ]; then
         read -p "Install observability? [y/N]: " INSTALL_OBS_ANSWER
         if [ "$INSTALL_OBS_ANSWER" = "y" ] || [ "$INSTALL_OBS_ANSWER" = "Y" ] || [ "$INSTALL_OBS_ANSWER" = "yes" ] || [ "$INSTALL_OBS_ANSWER" = "YES" ]; then
-            "$SCRIPT_DIR/install-observability.sh" --namespace "$MAAS_API_NAMESPACE"
+            # If stack specified via flag, use it; otherwise prompt
+            if [ -z "$OBSERVABILITY_STACK" ]; then
+                OBSERVABILITY_STACK=$(select_observability_stack)
+            fi
+            "$SCRIPT_DIR/install-observability.sh" --namespace "$MAAS_API_NAMESPACE" --stack "$OBSERVABILITY_STACK"
         else
             echo "⏭️  Skipping observability installation"
             echo "   To install later, from project root run: ./scripts/install-observability.sh --namespace $MAAS_API_NAMESPACE"

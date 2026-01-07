@@ -1,0 +1,26 @@
+# Perses Datasource for OpenShift Prometheus (Thanos Querier)
+# Based on official OpenShift sample from perses-operator
+apiVersion: perses.dev/v1alpha1
+kind: PersesDatasource
+metadata:
+  name: prometheus
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  config:
+    display:
+      name: "Prometheus (Thanos Querier)"
+    default: true
+    plugin:
+      kind: "PrometheusDatasource"
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+  # TLS configuration for OpenShift service CA
+  client:
+    tls:
+      enable: true
+      insecureSkipVerify: true  # For internal service communication

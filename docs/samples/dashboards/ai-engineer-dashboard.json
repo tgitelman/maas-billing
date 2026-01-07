@@ -85,7 +85,8 @@
           "refId": "A"
         }
       ],
-      "title": "📊 My Total Requests",
+      "description": "Total API tokens you have consumed that were successfully authorized.",
+      "title": "📊 My Total Tokens",
       "type": "stat"
     },
     {

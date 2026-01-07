@@ -29,8 +29,8 @@ spec:
           "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
           "targets": [{"expr": "sum(authorized_hits{user=~\"^$user$\"})", "instant": true, "refId": "A"}],
-          "description": "Total API requests you have made that were successfully authorized.",
-          "title": "📊 My Total Requests",
+          "description": "Total API tokens you have consumed that were successfully authorized.",
+          "title": "📊 My Total Tokens",
           "type": "stat"
         },
         {

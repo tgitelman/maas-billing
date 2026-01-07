@@ -1086,12 +1086,72 @@
       "type": "timeseries"
     },
     {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 200}, {"color": "red", "value": 1000}]},
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 34},
+      "id": 37,
+      "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "histogram_quantile(0.99, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))", "legendFormat": "{{destination_service_name}}", "refId": "A"}],
+      "title": "⏱️ P99 Latency by Service",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}]},
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34},
+      "id": 38,
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "sum by (tier) (rate(limited_calls[5m]))", "legendFormat": "{{tier}}", "refId": "A"}],
+      "title": "🚫 Rate Limit Violations by Tier",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 42},
+      "id": 39,
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))", "legendFormat": "{{tier}}", "refId": "A"}],
+      "title": "✅ Success Rate by Tier",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 50
       },
       "id": 103,
       "panels": [],
@@ -1126,7 +1186,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 35
+        "y": 51
       },
       "id": 19,
       "options": {
@@ -1148,13 +1208,74 @@
       "pluginVersion": "11.3.0",
       "targets": [
         {
+          "expr": "topk(10, sum by (user) (authorized_calls))",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "description": "Top 10 users ranked by total API requests made.",
+      "title": "🏆 Top 10 Users by Hits",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "id": 34,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": ["sum"],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "🔤 Tokens"
+          }
+        ]
+      },
+      "pluginVersion": "11.3.0",
+      "targets": [
+        {
           "expr": "topk(10, sum by (user) (authorized_hits))",
           "format": "table",
           "instant": true,
           "refId": "A"
         }
       ],
-      "title": "🏆 Top 10 Users by Hits",
+      "description": "Top 10 users ranked by total API tokens consumed.",
+      "title": "🏆 Top 10 Users by Tokens",
       "type": "table"
     },
     {
@@ -1163,7 +1284,62 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 65
+      },
+      "id": 110,
+      "panels": [],
+      "title": "🔤 Token Consumption",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 66},
+      "id": 35,
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "sum by (tier) (authorized_hits)", "legendFormat": "{{tier}}", "refId": "A"}],
+      "description": "Total API tokens consumed per tier, extracted from model response usage.total_tokens.",
+      "title": "🔤 Token Consumption by Tier",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${datasource}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"tooltip": false, "viz": false, "legend": false}, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 66},
+      "id": 36,
+      "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "pluginVersion": "11.3.0",
+      "targets": [{"expr": "sum by (user) (authorized_hits)", "legendFormat": "{{user}}", "refId": "A"}],
+      "description": "Total API tokens consumed per user, extracted from model response usage.total_tokens.",
+      "title": "🔤 Token Consumption by User",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 74
       },
       "id": 104,
       "panels": [],
@@ -1219,7 +1395,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 75
       },
       "id": 8,
       "options": {
@@ -1326,7 +1502,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 51
+        "y": 83
       },
       "id": 9,
       "options": {
@@ -1359,7 +1535,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 59},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 91},
       "id": 106,
       "panels": [],
       "title": "🤖 Model Metrics",
@@ -1377,7 +1553,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 60},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 92},
       "id": 21,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "11.3.0",
@@ -1397,7 +1573,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 60},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 92},
       "id": 22,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "11.3.0",
@@ -1417,7 +1593,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 60},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 92},
       "id": 23,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "11.3.0",
@@ -1437,7 +1613,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 60},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 92},
       "id": 24,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "11.3.0",
@@ -1458,7 +1634,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 65},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 97},
       "id": 25,
       "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "pluginVersion": "11.3.0",
@@ -1482,7 +1658,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 65},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 97},
       "id": 26,
       "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "pluginVersion": "11.3.0",
@@ -1506,7 +1682,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 73},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 105},
       "id": 27,
       "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "11.3.0",
@@ -1527,7 +1703,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 18, "x": 6, "y": 73},
+      "gridPos": {"h": 5, "w": 18, "x": 6, "y": 105},
       "id": 28,
       "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "pluginVersion": "11.3.0",
@@ -1540,7 +1716,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 78},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 110},
       "id": 107,
       "panels": [],
       "title": "📦 Resource Allocation",
@@ -1563,7 +1739,7 @@
           {"matcher": {"id": "byName", "options": "Memory Limits"}, "properties": [{"id": "unit", "value": "bytes"}, {"id": "custom.width", "value": 150}]}
         ]
       },
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 79},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 111},
       "id": 29,
       "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Memory Requests"}]},
       "pluginVersion": "11.3.0",
@@ -1583,7 +1759,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 87},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 119},
       "id": 109,
       "panels": [],
       "title": "👤 User Tracking",
@@ -1601,7 +1777,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 88},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 120},
       "id": 30,
       "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "pluginVersion": "11.3.0",
@@ -1614,7 +1790,7 @@
     },
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 96},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 128},
       "id": 108,
       "panels": [],
       "title": "🔮 Blocked Features (Placeholders)",
@@ -1633,7 +1809,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 97},
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 129},
       "id": 31,
       "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "11.3.0",
@@ -1643,7 +1819,7 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "${datasource}"},
-      "description": "⚠️ BLOCKED: Requires vLLM to accept and label metrics with 'user' context.\n\nExpected metrics:\n- vllm:prompt_tokens_total{user=\"$user\"}\n- vllm:generation_tokens_total{user=\"$user\"}\n\nCurrently vLLM only labels by model_name, not by user.",
+      "description": "⚠️ BLOCKED: Input vs Output token breakdown per user requires vLLM changes.\n\nExpected metrics:\n- vllm:prompt_tokens_total{user=\"$user\"} (input tokens)\n- vllm:generation_tokens_total{user=\"$user\"} (output tokens)\n\nNote: Total token consumption per user IS available via authorized_hits{user=\"...\"}.\nThis panel is specifically for the input/output breakdown needed for accurate billing.",
       "fieldConfig": {
         "defaults": {
           "color": {"mode": "thresholds"},
@@ -1654,12 +1830,12 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 97},
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 129},
       "id": 32,
       "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "11.3.0",
       "targets": [{"expr": "sum by (user) (increase(vllm:prompt_tokens_total{user!=\"\"}[1h]))", "instant": true, "refId": "A"}],
-      "title": "🔤 Token Consumption per User",
+      "title": "🔤 Input/Output Token Breakdown per User",
       "type": "stat"
     },
     {
@@ -1674,7 +1850,7 @@
         },
         "overrides": []
       },
-      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 97},
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 129},
       "id": 33,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
       "pluginVersion": "11.3.0",
