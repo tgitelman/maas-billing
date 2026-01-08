@@ -6,10 +6,13 @@
 
 | Metric | Source | Labels Available | Notes |
 | ------ | ------ | ---------------- | ----- |
-| `authorized_hits` | Limitador | ✅ `user`, `tier`, `model`, `limitador_namespace` | ✅ Working - Counts successful API calls |
-| `authorized_calls` | Limitador | ✅ `user`, `tier`, `model`, `limitador_namespace` | ✅ Working - Rate limiting success counter |
+| `authorized_hits` | Limitador | ✅ `user`, `tier`, `model`, `limitador_namespace` | ✅ Working - **Token consumption** (extracted from `usage.total_tokens` in model responses via TokenRateLimitPolicy) |
+| `authorized_calls` | Limitador | ✅ `user`, `tier`, `model`, `limitador_namespace` | ✅ Working - **Request count** (number of authorized API calls) |
 | `limited_calls` | Limitador | ✅ `user`, `tier`, `model`, `limitador_namespace` | ✅ Working - Rate limiting block counter |
 | `limitador_up` | Limitador | Standard Prometheus labels | ✅ Working - Health check metric |
+
+!!! info "Tokens vs Requests"
+    With `TokenRateLimitPolicy`, `authorized_hits` tracks **token consumption** (extracted from `usage.total_tokens` in LLM response bodies), not request counts. Use `authorized_calls` for request counts.
 
 **Example metrics (verified on cluster):**
 
@@ -203,50 +206,68 @@ All queries using `user`, `tier`, `model` labels are now working!
 #### Per-User Queries
 
 ```promql
-# Requests per user
+# Token consumption per user
 sum by (user) (authorized_hits)
+
+# Request count per user
+sum by (user) (authorized_calls)
 
 # Rate limited requests per user
 sum by (user) (limited_calls)
 
-# User throughput
+# User token consumption rate
 rate(authorized_hits{user="tgitelma-redhat-com-dd264a84"}[5m])
 ```
 
 #### Per-Model Queries
 
 ```promql
-# Requests per model
+# Token consumption per model
 sum by (model) (authorized_hits)
 
-# Model error rates
+# Request count per model
+sum by (model) (authorized_calls)
+
+# Model error rates (rate-limited)
 sum by (model) (limited_calls)
 
-# Model throughput
+# Model token consumption rate
 rate(authorized_hits{model="facebook-opt-125m-simulated"}[5m])
 ```
 
 #### Per-Tier Queries
 
 ```promql
-# Requests per tier
+# Token consumption per tier
 sum by (tier) (authorized_hits)
 
-# Tier distribution
+# Request count per tier
+sum by (tier) (authorized_calls)
+
+# Tier token consumption rate
 sum by (tier) (rate(authorized_hits[5m]))
+
+# Success rate by tier
+sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))
 ```
 
 #### Combined Queries
 
 ```promql
-# User activity by model
+# User token consumption by model
 sum by (user, model) (authorized_hits)
 
-# Top users by requests
+# Top users by token consumption
 topk(10, sum by (user) (authorized_hits))
+
+# Top users by request count
+topk(10, sum by (user) (authorized_calls))
 
 # Success rate per user
 sum by (user) (authorized_calls) / (sum by (user) (authorized_calls) + sum by (user) (limited_calls))
+
+# Rate limit violations by tier
+sum by (tier) (rate(limited_calls[5m]))
 ```
 
 ---
@@ -279,7 +300,10 @@ With Istio gateway metrics now scraped, we have:
 | Missing Feature | Why It's Needed | What's Blocking It |
 |-----------------|-----------------|-------------------|
 | **Latency per User/API Key** | Track response time per customer | Istio metrics don't include `user` label - requires EnvoyFilter |
-| **Token Consumption per User** | Track tokens per customer | vLLM doesn't label metrics with `user` - requires vLLM code changes |
+| **Input/Output Token Breakdown per User** | Separate prompt vs generation tokens per customer | vLLM doesn't label metrics with `user` - requires vLLM code changes |
+
+!!! note "Total Token Consumption IS Available"
+    Total token consumption per user **is available** via `authorized_hits{user="..."}`. The blocked feature is specifically the **input/output token breakdown** (prompt tokens vs generation tokens) per user.
 
 **Recently Resolved ✅:**
 
@@ -294,7 +318,7 @@ With Istio gateway metrics now scraped, we have:
 | Missing Feature | Current Workaround |
 |-----------------|-------------------|
 | Model Status | Using `kube_pod_status_phase` to show running pod counts |
-| Token Consumption | Using request counts as proxy for usage |
+| Input/Output Token Breakdown | Total tokens available via `authorized_hits`; breakdown requires vLLM changes |
 | Per-user latency | Showing service-level latency (maas-api vs model service) |
 
 ---
@@ -333,12 +357,12 @@ With Istio gateway metrics now scraped, we have:
 
 ### ✅ Limitador Metrics (All Custom Labels Working)
 
-| Metric Name | Available Labels | Filtering Capability |
-| ----------- | ---------------- | -------------------- |
-| `authorized_hits` | `user`, `tier`, `model`, `limitador_namespace` | ✅ By user, tier, model, route |
-| `authorized_calls` | `user`, `tier`, `model`, `limitador_namespace` | ✅ By user, tier, model, route |
-| `limited_calls` | `user`, `tier`, `model`, `limitador_namespace` | ✅ By user, tier, model, route |
-| `limitador_up` | Standard labels | ✅ Health check |
+| Metric Name | Available Labels | Filtering Capability | Description |
+| ----------- | ---------------- | -------------------- | ----------- |
+| `authorized_hits` | `user`, `tier`, `model`, `limitador_namespace` | ✅ By user, tier, model, route | **Token consumption** (from `usage.total_tokens`) |
+| `authorized_calls` | `user`, `tier`, `model`, `limitador_namespace` | ✅ By user, tier, model, route | **Request count** (API calls) |
+| `limited_calls` | `user`, `tier`, `model`, `limitador_namespace` | ✅ By user, tier, model, route | Rate-limited requests |
+| `limitador_up` | Standard labels | ✅ Health check | Limitador health status |
 
 ### ✅ Istio Gateway Metrics (Primary for Latency & Errors)
 
@@ -378,11 +402,13 @@ With Istio gateway metrics now scraped, we have:
 | Metric Type | Source | Status |
 | ----------- | ------ | ------ |
 | **Resource allocation** | kube-state-metrics | ✅ **Available** - `kube_pod_container_resource_requests{namespace="llm"}` |
-| **Request/Error per User** | Limitador | ✅ **Available** - `authorized_calls{user="..."}`, `limited_calls{user="..."}` |
+| **Request count per User** | Limitador | ✅ **Available** - `authorized_calls{user="..."}` |
+| **Token consumption per User** | Limitador | ✅ **Available** - `authorized_hits{user="..."}` (total tokens) |
+| **Rate limit errors per User** | Limitador | ✅ **Available** - `limited_calls{user="..."}` |
 | **Model Inference Latency** | vLLM | ✅ **Available** - `vllm:e2e_request_latency_seconds` (v0.6.1+) |
-| **Token consumption (total)** | vLLM | ⚠️ **Partial** - `vllm:prompt_tokens_total` (requires real vLLM, not simulator) |
+| **Input/Output token totals** | vLLM | ⚠️ **Partial** - `vllm:prompt_tokens_total` (requires real vLLM, not simulator) |
 | **Latency per User** | Istio | ❌ **Blocked** - Requires EnvoyFilter to inject user label |
-| **Token per User** | vLLM | ❌ **Blocked** - Requires vLLM code changes to label by user |
+| **Input/Output tokens per User** | vLLM | ❌ **Blocked** - Requires vLLM code changes to label by user |
 
 ---
 
@@ -428,7 +454,7 @@ oc apply -k deployment/components/observability/dashboards
 
 4. **Latency Metrics**: Available at route level via HAProxy. For per-user latency, additional instrumentation would be needed.
 
-5. **Blocked Features**: Only per-user latency (requires EnvoyFilter) and per-user tokens (requires vLLM changes) remain blocked.
+5. **Blocked Features**: Only per-user latency (requires EnvoyFilter) and per-user input/output token breakdown (requires vLLM changes) remain blocked. Total token consumption per user IS available via `authorized_hits`.
 
 6. **Verified Users**:
    - `tgitelma-redhat-com-dd264a84`
