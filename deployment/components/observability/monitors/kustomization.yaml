@@ -21,3 +21,4 @@ labels:
       app.kubernetes.io/managed-by: maas-observability
     includeSelectors: false
 
+
