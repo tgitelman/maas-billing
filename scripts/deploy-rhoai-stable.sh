@@ -598,6 +598,14 @@ export CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jso
 # Use helper function to get cluster audience from JWT
 export AUD="$(get_cluster_audience)"
 
+# Validate AUD was retrieved successfully
+if [[ -z "$AUD" ]]; then
+  echo "ERROR: Failed to retrieve cluster audience from JWT token." >&2
+  echo "  This is required to configure the AuthPolicy for authentication." >&2
+  echo "  Ensure 'default' ServiceAccount exists and can create tokens." >&2
+  exit 1
+fi
+
 echo "* Cluster domain: ${CLUSTER_DOMAIN}"
 echo "* Cluster audience: ${AUD}"
 
