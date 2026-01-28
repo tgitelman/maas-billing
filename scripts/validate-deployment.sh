@@ -106,6 +106,10 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         --namespace|-n)
+            if [ -z "$2" ] || [ "${2#-}" != "$2" ]; then
+                echo "Error: --namespace requires a value (e.g., --namespace maas-api)" >&2
+                exit 1
+            fi
             MAAS_API_NAMESPACE="$2"
             shift 2
             ;;
