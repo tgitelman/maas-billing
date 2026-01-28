@@ -18,4 +18,4 @@ spec:
       tagOverrides:
         user:
           operation: UPSERT
-          value: request.headers['x-maas-username']
+          value: request.headers["x-maas-username"]
