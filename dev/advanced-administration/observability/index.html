@@ -11,7 +11,7 @@
         <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/advanced-administration/observability/">
       
       
-        <link rel="prev" href="../../configuration-and-management/tier-modification-known-issues/">
+        <link rel="prev" href="../../configuration-and-management/model-access-behavior/">
       
       
         <link rel="next" href="../limitador-persistence/">
@@ -609,69 +609,15 @@
   
   
   
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1_2" >
-        
-          
-          <label class="md-nav__link" for="__nav_4_1_2" id="__nav_4_1_2_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Operators
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_1_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_1_2">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Operators
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
     <li class="md-nav__item">
-      <a href="../../install/odh-setup/" class="md-nav__link">
+      <a href="../../install/platform-setup/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Open Data Hub
+    Operator Setup
   
 
     
@@ -680,42 +626,6 @@
   
 
       </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../install/rhoai-setup/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Red Hat OpenShift AI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
     </li>
   
 
@@ -1019,6 +929,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/tls-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1155,6 +1093,34 @@
     
   
     Tier Modification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/model-access-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Access
   
 
     
@@ -1428,78 +1394,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#installing-the-observability-stack" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Installing the Observability Stack
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Installing the Observability Stack">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#during-main-deployment" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        During Main Deployment
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#standalone-installation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Standalone Installation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#what-gets-installed" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What Gets Installed
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#accessing-grafana" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Accessing Grafana
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#grafana-datasource-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Grafana Datasource Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#grafana-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1512,10 +1406,38 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#available-dashboards" class="md-nav__link">
+  <a href="#maas-platform-overview-dashboard" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Available Dashboards
+        MaaS Platform Overview Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-metrics-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Metrics Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Key Metrics Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#token-consumption-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Consumption Metrics
       
     </span>
   </a>
@@ -1523,10 +1445,77 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#manual-dashboard-import" class="md-nav__link">
+  <a href="#latency-metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Manual Dashboard Import
+        Latency Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Latency Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-user-latency-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-User Latency Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Queries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known Limitations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Known Limitations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#currently-blocked-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Currently Blocked Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#available-per-user-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Per-User Metrics
       
     </span>
   </a>
@@ -1862,78 +1851,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#installing-the-observability-stack" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Installing the Observability Stack
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Installing the Observability Stack">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#during-main-deployment" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        During Main Deployment
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#standalone-installation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Standalone Installation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#what-gets-installed" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What Gets Installed
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#accessing-grafana" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Accessing Grafana
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#grafana-datasource-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Grafana Datasource Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#grafana-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1946,10 +1863,38 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#available-dashboards" class="md-nav__link">
+  <a href="#maas-platform-overview-dashboard" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Available Dashboards
+        MaaS Platform Overview Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-metrics-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Metrics Reference
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Key Metrics Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#token-consumption-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Token Consumption Metrics
       
     </span>
   </a>
@@ -1957,10 +1902,77 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#manual-dashboard-import" class="md-nav__link">
+  <a href="#latency-metrics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Manual Dashboard Import
+        Latency Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Latency Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#per-user-latency-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-User Latency Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-queries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Queries
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known Limitations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Known Limitations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#currently-blocked-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Currently Blocked Features
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#available-per-user-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Per-User Metrics
       
     </span>
   </a>
@@ -1996,21 +2008,20 @@
 <p>This document covers the observability stack for the MaaS Platform, including metrics collection, monitoring, and visualization.</p>
 <div class="admonition warning">
 <p class="admonition-title">Important</p>
-<p><a href="https://docs.redhat.com/en/documentation/openshift_container_platform/4.19/html/monitoring/configuring-user-workload-monitoring">User Workload Monitoring</a> must be enabled in order to collect metrics.</p>
+<p><a href="https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.20/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm">User Workload Monitoring</a> must be enabled in order to collect metrics.</p>
 <p>Add <code>enableUserWorkload: true</code> to the <code>cluster-monitoring-config</code> in the <code>openshift-monitoring</code> namespace</p>
 </div>
 <h2 id="overview">Overview</h2>
 <p>As part of Dev Preview MaaS Platform includes a basic observability stack that provides insights into system performance, usage patterns, and operational health. The observability stack consists of:</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>The observability stack will be enhanced in the future.</p>
 </div>
+<p>The observability stack will be enhanced in the future.</p>
 <ul>
 <li><strong>Limitador</strong>: Rate limiting service that exposes metrics</li>
-<li><strong>Prometheus</strong>: Metrics collection and storage (uses OpenShift platform Prometheus on OpenShift clusters)</li>
-<li><strong>ServiceMonitors</strong>: Automatically deployed to configure Prometheus metric scraping</li>
-<li><strong>Grafana</strong>: Metrics visualization and dashboards</li>
-<li><strong>Future</strong>: Migration to Perses for enhanced dashboard management</li>
+<li><strong>Prometheus</strong>: Metrics collection and storage (uses OpenShift platform Prometheus)</li>
+<li><strong>ServiceMonitors</strong>: Deployed to configure Prometheus metric scraping</li>
+<li><strong>Visualization</strong>: Grafana dashboards (see <a href="https://grafana.com/docs/grafana/latest/">Grafana documentation</a>)</li>
 </ul>
 <h2 id="metrics-collection">Metrics Collection</h2>
 <h3 id="limitador-metrics">Limitador Metrics</h3>
@@ -2036,35 +2047,36 @@
 <li><code>limitador_ratelimit_tier_denied_total</code>: Denied requests per tier</li>
 </ul>
 <h3 id="servicemonitor-configuration">ServiceMonitor Configuration</h3>
-<p>ServiceMonitors are automatically deployed during the main deployment (step 14) to configure OpenShift's Prometheus to discover and scrape metrics from MaaS components.</p>
+<p>ServiceMonitors are automatically deployed as part of <code>deploy-openshift.sh</code> to configure OpenShift's Prometheus to discover and scrape metrics from MaaS components.</p>
 <p><strong>Automatically Deployed ServiceMonitors:</strong></p>
 <ul>
-<li><strong>Limitador</strong>: Scrapes rate limiting metrics from Limitador pods</li>
-<li><strong>Authorino</strong>: Scrapes authentication metrics from Authorino pods</li>
-<li><strong>vLLM Models</strong>: Scrapes metrics from vLLM simulator and model services</li>
-<li><strong>MaaS API</strong>: Scrapes metrics from MaaS API services</li>
+<li><strong>Limitador</strong>: Scrapes rate limiting metrics from Limitador pods in <code>kuadrant-system</code></li>
+<li><strong>Istio Gateway</strong>: Scrapes Envoy metrics from the MaaS gateway in <code>openshift-ingress</code></li>
 </ul>
-<p>These ServiceMonitors are deployed in the <code>maas-api</code> namespace and use <code>namespaceSelector</code> to discover services in other namespaces (e.g., <code>kuadrant-system</code>, <code>llm</code>).</p>
+<p><strong>Optional ServiceMonitors (in <code>docs/samples/observability/</code>):</strong></p>
+<ul>
+<li><strong>KServe LLM Models</strong>: For scraping vLLM metrics from your deployed models</li>
+</ul>
+<p>To deploy the optional KServe ServiceMonitor:</p>
+<div class="highlight"><pre><span></span><code>kubectl apply -f docs/samples/observability/kserve-llm-models-servicemonitor.yaml
+</code></pre></div>
 <p><strong>Manual ServiceMonitor Creation (Advanced):</strong></p>
-<p>If you need to create additional ServiceMonitors for custom services, use the following template:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">monitoring.coreos.com/v1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ServiceMonitor</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-service-monitor</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-api</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-app</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">      </span><span class="nt">app</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-service</span>
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="nt">endpoints</span><span class="p">:</span>
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http</span>
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/metrics</span>
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="nt">namespaceSelector</span><span class="p">:</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">    </span><span class="nt">matchNames</span><span class="p">:</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">your-namespace</span>
+<p>If you need to create additional ServiceMonitors for custom services:</p>
+<div class="highlight"><pre><span></span><code>apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: your-service-monitor
+  namespace: your-namespace  # Same namespace as the service
+  labels:
+    app: your-app
+spec:
+  selector:
+    matchLabels:
+      app: your-service
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
 </code></pre></div>
 <h2 id="high-availability-for-maas-metrics">High Availability for MaaS Metrics</h2>
 <p>For production deployments where metric persistence across pod restarts and scaling events is critical, you should configure Limitador to use Redis as a backend storage solution.</p>
@@ -2086,92 +2098,175 @@
 <li>Production-ready setup instructions</li>
 </ul>
 <p>For local development and testing, you can also use our <a href="../limitador-persistence/">Limitador Persistence</a> guide which includes a basic Redis setup script that works with any Kubernetes cluster.</p>
-<h2 id="installing-the-observability-stack">Installing the Observability Stack</h2>
-<p>The observability stack can be installed during the main deployment or separately.</p>
-<h3 id="during-main-deployment">During Main Deployment</h3>
-<p>When running <code>deploy-openshift.sh</code>, you'll be prompted to install the observability stack:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>./scripts/deploy-openshift.sh
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># When prompted, answer &#39;y&#39; to install observability</span>
-</code></pre></div>
-<p>Or use flags to control installation:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Install with observability</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>./scripts/deploy-openshift.sh<span class="w"> </span>--with-observability
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Skip observability installation</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>./scripts/deploy-openshift.sh<span class="w"> </span>--skip-observability
-</code></pre></div>
-<h3 id="standalone-installation">Standalone Installation</h3>
-<p>To install the observability stack separately:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Install to default namespace (maas-api)</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./scripts/install-observability.sh
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Install to custom namespace</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>./scripts/install-observability.sh<span class="w"> </span>--namespace<span class="w"> </span>my-namespace
-</code></pre></div>
-<h3 id="what-gets-installed">What Gets Installed</h3>
-<p>The observability stack includes:</p>
-<ol>
-<li><strong>Grafana Operator</strong>: Installed automatically if not present</li>
-<li><strong>Grafana Instance</strong>: Deployed to the target namespace</li>
-<li><strong>Prometheus Datasource</strong>: Configured with authentication token (connects to OpenShift platform Prometheus)</li>
-<li><strong>ServiceMonitors</strong>: Automatically deployed during main deployment to configure metric scraping</li>
-<li><strong>Dashboards</strong>:</li>
-<li>Platform Admin Dashboard</li>
-<li>AI Engineer Dashboard</li>
-</ol>
-<div class="admonition note">
-<p class="admonition-title">ServiceMonitors Deployment</p>
-<p>ServiceMonitors are deployed automatically in step 14 of <code>deploy-openshift.sh</code>, even if the observability stack (Grafana) is not installed. This ensures that OpenShift's Prometheus can collect metrics from MaaS components regardless of whether Grafana is installed.</p>
-</div>
-<h3 id="accessing-grafana">Accessing Grafana</h3>
-<p>After installation, get the Grafana URL:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Get the route</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>route<span class="w"> </span>grafana-ingress<span class="w"> </span>-n<span class="w"> </span>maas-api<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.host}&#39;</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Access at: https://&lt;route-host&gt;</span>
-</code></pre></div>
-<p><strong>Default Credentials:</strong>
-- Username: <code>admin</code>
-- Password: <code>admin</code></p>
-<div class="admonition warning">
-<p class="admonition-title">Security</p>
-<p>Change the default Grafana credentials immediately after first login. The credentials are stored in the Grafana instance manifest and should be updated for production deployments.</p>
-</div>
-<h3 id="grafana-datasource-configuration">Grafana Datasource Configuration</h3>
-<p>The Prometheus datasource is automatically configured to connect to OpenShift's platform Prometheus:</p>
-<ul>
-<li><strong>URL</strong>: <code>https://thanos-querier.openshift-monitoring.svc.cluster.local:9091</code></li>
-<li><strong>Authentication</strong>: Bearer token from OpenShift service account</li>
-<li><strong>TLS</strong>: Skip verification (internal cluster communication)</li>
-</ul>
-<div class="admonition note">
-<p class="admonition-title">OpenShift Platform Prometheus</p>
-<p>On OpenShift clusters, the platform provides Prometheus in the <code>openshift-monitoring</code> namespace. The MaaS Platform does not deploy a custom Prometheus instance. Instead, ServiceMonitors are used to configure the platform Prometheus to scrape metrics from MaaS components.</p>
-</div>
-<p>The datasource is created dynamically by <code>install-observability.sh</code> with proper token injection. A static datasource manifest is not used to ensure authentication tokens are properly configured.</p>
 <h2 id="grafana-dashboards">Grafana Dashboards</h2>
-<h3 id="available-dashboards">Available Dashboards</h3>
-<p>The observability stack includes two pre-configured dashboards:</p>
+<h3 id="maas-platform-overview-dashboard">MaaS Platform Overview Dashboard</h3>
+<p>We are providing a basic dashboard for the MaaS Platform that can be used to get a quick
+overview of the system. Its definition can be found and imported from the following 
+link:
+<a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json">maas-token-metrics-dashboard.json</a></p>
+<p>See more detailed description of the Grafana Dashboard in <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/dashboards">its README of the 
+repository</a>.</p>
+<p>To import into Grafana:</p>
 <ol>
-<li><strong>Platform Admin Dashboard</strong>: Overview of system-wide metrics, usage patterns, and health</li>
-<li><strong>AI Engineer Dashboard</strong>: Model-specific metrics, token usage, and performance</li>
-</ol>
-<h3 id="manual-dashboard-import">Manual Dashboard Import</h3>
-<p>You can also manually import dashboard JSON files:</p>
-<ol>
-<li><strong>Import into Grafana:</strong></li>
 <li>Go to Grafana → Dashboards → Import</li>
-<li>
-<p>Upload the JSON file or paste the URL</p>
-</li>
-<li>
-<p><strong>Available Dashboards:</strong></p>
-</li>
-<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/platform-admin-dashboard.json">Platform Admin Dashboard</a></li>
-<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/ai-engineer-dashboard.json">AI Engineer Dashboard</a></li>
-<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json">MaaS Token Metrics Dashboard</a></li>
+<li>Upload the JSON file or paste content</li>
+<li>Select your Prometheus datasource</li>
 </ol>
-<p>See more detailed description of the Grafana Dashboards in <a href="https://github.com/opendatahub-io/models-as-a-service/tree/main/docs/samples/dashboards">its README of the repository</a>.</p>
+<h2 id="key-metrics-reference">Key Metrics Reference</h2>
+<h3 id="token-consumption-metrics">Token Consumption Metrics</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+<th>Labels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>authorized_hits</code></td>
+<td>Total tokens consumed (from <code>usage.total_tokens</code>)</td>
+<td><code>user</code>, <code>tier</code>, <code>model</code></td>
+</tr>
+<tr>
+<td><code>authorized_calls</code></td>
+<td>Total requests allowed</td>
+<td><code>user</code>, <code>tier</code>, <code>model</code></td>
+</tr>
+<tr>
+<td><code>limited_calls</code></td>
+<td>Total requests rate-limited</td>
+<td><code>user</code>, <code>tier</code>, <code>model</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="latency-metrics">Latency Metrics</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+<th>Labels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>istio_request_duration_milliseconds_bucket</code></td>
+<td>Gateway-level latency histogram</td>
+<td><code>destination_service_name</code>, <code>user</code></td>
+</tr>
+<tr>
+<td><code>vllm:e2e_request_latency_seconds</code></td>
+<td>Model inference latency</td>
+<td><code>model_name</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="per-user-latency-tracking">Per-User Latency Tracking</h4>
+<p>The MaaS Platform uses an Istio Telemetry resource to add a <code>user</code> dimension to gateway latency metrics. This enables tracking request latency per authenticated user.</p>
+<p><strong>How it works:</strong></p>
+<ol>
+<li>The <code>gateway-auth-policy</code> injects the <code>X-MaaS-Username</code> header from the authenticated identity</li>
+<li>The Istio Telemetry resource extracts this header and adds it as a <code>user</code> label to the <code>REQUEST_DURATION</code> metric</li>
+<li>Prometheus scrapes these metrics from the Istio gateway</li>
+</ol>
+<p><strong>Configuration</strong> (<code>deployment/base/observability/istio-telemetry.yaml</code>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">telemetry.istio.io/v1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Telemetry</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">latency-per-user</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">      </span><span class="nt">gateway.networking.k8s.io/gateway-name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="nt">metrics</span><span class="p">:</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">providers</span><span class="p">:</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prometheus</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">overrides</span><span class="p">:</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">match</span><span class="p">:</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">        </span><span class="nt">metric</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">REQUEST_DURATION</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">        </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CLIENT_AND_SERVER</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">      </span><span class="nt">tagOverrides</span><span class="p">:</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">        </span><span class="nt">user</span><span class="p">:</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">          </span><span class="nt">operation</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">UPSERT</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">request.headers[&quot;x-maas-username&quot;]</span>
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Security</p>
+<p>The <code>X-MaaS-Username</code> header is injected by the AuthPolicy from the authenticated identity, not from client input. This prevents users from spoofing the header to manipulate metrics attribution.</p>
+</div>
+<h3 id="common-queries">Common Queries</h3>
+<div class="highlight"><pre><span></span><code># Token consumption per user
+sum by (user) (authorized_hits)
+
+# P99 latency per user (filter out unauthenticated requests)
+histogram_quantile(0.99, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!=&quot;&quot;,user!=&quot;unknown&quot;}[5m])))
+
+# Request rate per tier
+sum by (tier) (rate(authorized_calls[5m]))
+
+# Success rate by tier
+sum by (tier) (authorized_calls) / (sum by (tier) (authorized_calls) + sum by (tier) (limited_calls))
+
+# P99 latency by service
+histogram_quantile(0.99, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket[5m])))
+
+# Top 10 users by tokens consumed
+topk(10, sum by (user) (authorized_hits))
+
+# Rate limit violations by tier
+sum by (tier) (rate(limited_calls[5m]))
+</code></pre></div>
+<div class="admonition tip">
+<p class="admonition-title">Filtering Unauthenticated Requests</p>
+<p>For per-user latency queries, use <code>user!="",user!="unknown"</code> to exclude requests that failed authentication (where the <code>X-MaaS-Username</code> header was not injected or has a default value). Token consumption metrics (<code>authorized_hits</code>, <code>authorized_calls</code>) from Limitador already only include successful requests.</p>
+</div>
+<h2 id="known-limitations">Known Limitations</h2>
+<h3 id="currently-blocked-features">Currently Blocked Features</h3>
+<p>Some dashboard features require upstream changes and are currently blocked:</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Blocker</th>
+<th>Workaround</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Input/Output token breakdown per user</strong></td>
+<td>vLLM doesn't label metrics with <code>user</code></td>
+<td>Total tokens available via <code>authorized_hits</code>; breakdown requires vLLM changes</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Total Tokens vs Token Breakdown</p>
+<p>Total token consumption per user <strong>is available</strong> via <code>authorized_hits{user="..."}</code>. The blocked feature is specifically the input/output token breakdown (prompt vs generation tokens) per user, which requires vLLM to accept user context in requests.</p>
+</div>
+<h3 id="available-per-user-metrics">Available Per-User Metrics</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Metric</th>
+<th>Label</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Latency per user</strong></td>
+<td><code>istio_request_duration_milliseconds_bucket</code></td>
+<td><code>user</code></td>
+</tr>
+<tr>
+<td><strong>Token consumption per user</strong></td>
+<td><code>authorized_hits</code></td>
+<td><code>user</code></td>
+</tr>
+</tbody>
+</table>
 
 
 
@@ -2194,7 +2289,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="December 23, 2025 16:23:33 UTC">December 23, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="February 4, 2026 14:19:50 UTC">February 4, 2026</span>
   </span>
 
     

@@ -11,7 +11,7 @@
         <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/configuration-and-management/model-setup/">
       
       
-        <link rel="prev" href="../token-management/">
+        <link rel="prev" href="../tls-configuration/">
       
       
         <link rel="next" href="../group-membership-known-issues/">
@@ -609,69 +609,15 @@
   
   
   
-    
-    
-    
-    
-      
-      
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1_2" >
-        
-          
-          <label class="md-nav__link" for="__nav_4_1_2" id="__nav_4_1_2_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Operators
-  
-
-    
-  </span>
-  
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_1_2_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4_1_2">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Operators
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
     <li class="md-nav__item">
-      <a href="../../install/odh-setup/" class="md-nav__link">
+      <a href="../../install/platform-setup/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Open Data Hub
+    Operator Setup
   
 
     
@@ -680,42 +626,6 @@
   
 
       </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../install/rhoai-setup/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Red Hat OpenShift AI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
     </li>
   
 
@@ -1006,6 +916,34 @@
     
   
     Token Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../tls-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS Configuration
   
 
     
@@ -1413,6 +1351,34 @@
     
   
     Tier Modification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../model-access-behavior/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Access
   
 
     
@@ -1972,11 +1938,13 @@ graph TB
 <p>The <code>maas-default-gateway</code> is created automatically during MaaS platform installation. You don't need to create it manually.</p>
 </div>
 <h3 id="benefits">Benefits</h3>
-<p>. <strong>Flexibility</strong>: Different models can have different security and access requirements
-. <strong>Progressive Adoption</strong>: Teams can adopt MaaS features incrementally
-. <strong>Production Control</strong>: Production models get full policy enforcement if needed
-. <strong>Multi-Tenancy</strong>: Different teams can use different gateways in the same cluster
-. <strong>Blast Radius Containment</strong>: Issues with one gateway don't affect the other</p>
+<ul>
+<li><strong>Flexibility</strong>: Different models can have different security and access requirements</li>
+<li><strong>Progressive Adoption</strong>: Teams can adopt MaaS features incrementally</li>
+<li><strong>Production Control</strong>: Production models get full policy enforcement if needed</li>
+<li><strong>Multi-Tenancy</strong>: Different teams can use different gateways in the same cluster</li>
+<li><strong>Blast Radius Containment</strong>: Issues with one gateway don't affect the other</li>
+</ul>
 <h2 id="prerequisites">Prerequisites</h2>
 <p>Before configuring a model for MaaS, ensure you have:</p>
 <ul>
@@ -2154,10 +2122,15 @@ graph TB
 <li>Check that RBAC was properly created for your tier</li>
 <li>Verify the service account in your token has the correct tier namespace</li>
 </ul>
+<div class="admonition warning">
+<p class="admonition-title">Removing Models from Tiers During Active Usage</p>
+<p>When updating the <code>alpha.maas.opendatahub.io/tiers</code> annotation to remove a tier, be aware that active requests may be affected. See <a href="../model-access-behavior/#model-tier-access-changes-during-active-usage">Model Tier Access Behavior</a> for details on expected behaviors and recommended practices.</p>
+</div>
 <h2 id="references">References</h2>
 <ul>
 <li><a href="../tier-overview/">Tier Management</a> - Learn about configuring tier access</li>
 <li><a href="../tier-configuration/">Tier Configuration</a> - Detailed tier setup instructions</li>
+<li><a href="../model-access-behavior/">Model Tier Access Behavior</a> - Expected behaviors and operational considerations</li>
 <li><a href="../../architecture/">Architecture Overview</a> - Understand the overall MaaS architecture</li>
 <li><a href="https://kserve.github.io/website/">KServe LLMInferenceService Documentation</a> - Official KServe documentation</li>
 </ul>
@@ -2183,7 +2156,7 @@ graph TB
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="December 15, 2025 14:41:35 UTC">December 15, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="January 14, 2026 03:47:47 UTC">January 14, 2026</span>
   </span>
 
     
