@@ -147,11 +147,26 @@ Personal usage view for individual developers:
 !!! info "Tokens vs Requests"
     Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
 
+### Prerequisites
+
+The install script **does not install** dashboard operators. You must pre-install:
+
+- **For Grafana dashboards**: Install the Grafana Operator in `openshift-operators` namespace
+    - Via OperatorHub: OpenShift Console → Operators → OperatorHub → Search "Grafana" → Install
+    - Via CLI: See [Grafana Operator docs](https://grafana.com/docs/grafana-cloud/monitor-infrastructure/kubernetes-monitoring/configuration/configure-infrastructure-manually/openshift/)
+- **For Perses dashboards**: [Cluster Observability Operator](https://docs.openshift.com/container-platform/latest/observability/cluster_observability_operator/cluster-observability-operator-overview.html) in `openshift-operators` namespace
+
+If the required operator is not installed, the script will skip dashboard deployment with a warning and continue with base observability setup.
+
 ### Deploying Dashboards
 
-Dashboards are deployed automatically by `install-observability.sh`, or manually:
+Once the operator is installed, dashboards are deployed by `install-observability.sh`:
 
-    # Deploy Grafana operator and instance
+    ./scripts/install-observability.sh --stack grafana
+
+Or manually:
+
+    # Deploy Grafana instance (requires Grafana Operator pre-installed)
     kubectl apply -k deployment/components/observability/grafana/
 
     # Deploy dashboards

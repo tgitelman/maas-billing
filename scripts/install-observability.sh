@@ -33,6 +33,10 @@ show_help() {
     echo "  - Deploys TelemetryPolicy and ServiceMonitors"
     echo "  - Configures Istio Gateway and LLM model metrics"
     echo ""
+    echo "Prerequisites for dashboards (not installed by this script):"
+    echo "  - Grafana: Grafana Operator must be installed in openshift-operators"
+    echo "  - Perses:  Cluster Observability Operator must be installed"
+    echo ""
     echo "Examples:"
     echo "  $0                              # Install monitoring only (no dashboards)"
     echo "  $0 --stack grafana              # Install monitoring + Grafana dashboards"
@@ -225,21 +229,22 @@ fi
 # ==========================================
 install_grafana() {
     echo ""
-    echo "4️⃣ Installing Grafana..."
+    echo "4️⃣ Installing Grafana dashboards..."
 
-    # Install Grafana Operator
-    if kubectl get csv -n openshift-operators 2>/dev/null | grep -q "grafana-operator"; then
-        echo "   ✅ Grafana Operator already installed"
-    else
-        "$SCRIPT_DIR/installers/install-grafana.sh"
+    # Check if Grafana Operator is installed (we assume it's pre-installed)
+    if ! kubectl get csv -n openshift-operators 2>/dev/null | grep -q "grafana-operator"; then
+        echo "   ⚠️  Grafana Operator not installed. Skipping Grafana dashboards."
+        echo "   To install Grafana Operator, see:"
+        echo "   https://grafana.com/docs/grafana-cloud/monitor-infrastructure/kubernetes-monitoring/configuration/configure-infrastructure-manually/openshift/"
+        return 0
     fi
+    echo "   ✅ Grafana Operator detected"
 
-    # Wait for CRDs
-    echo "   Waiting for Grafana CRDs..."
-    wait_for_crd "grafanas.grafana.integreatly.org" 120 || {
-        echo "   ❌ Grafana CRDs not available. Please install Grafana Operator manually."
-        return 1
-    }
+    # Verify CRDs are available
+    if ! kubectl get crd grafanas.grafana.integreatly.org &>/dev/null; then
+        echo "   ⚠️  Grafana CRDs not available. Skipping Grafana dashboards."
+        return 0
+    fi
 
     # Ensure namespace exists
     kubectl create namespace "$NAMESPACE" 2>/dev/null || true
@@ -398,23 +403,29 @@ EOF
 # ==========================================
 install_perses() {
     echo ""
-    echo "5️⃣ Installing Perses..."
+    echo "5️⃣ Installing Perses dashboards..."
 
-    # Install Cluster Observability Operator (includes Perses)
-    if kubectl get csv -n openshift-operators 2>/dev/null | grep -q "cluster-observability-operator.*Succeeded"; then
-        echo "   ✅ Cluster Observability Operator already installed"
-    else
-        "$SCRIPT_DIR/installers/install-perses.sh"
+    # Check if Cluster Observability Operator is installed (we assume it's pre-installed)
+    if ! kubectl get csv -n openshift-operators 2>/dev/null | grep -q "cluster-observability-operator"; then
+        echo "   ⚠️  Cluster Observability Operator not installed. Skipping Perses dashboards."
+        echo "   To install COO, see:"
+        echo "   https://docs.openshift.com/container-platform/latest/observability/cluster_observability_operator/cluster-observability-operator-overview.html"
+        return 0
     fi
+    echo "   ✅ Cluster Observability Operator detected"
 
-    # Wait for Perses CRDs (all 3 are needed for instance, dashboards, and datasource)
-    echo "   Waiting for Perses CRDs..."
+    # Verify Perses CRDs are available
+    MISSING_CRDS=""
     for crd in perses.perses.dev persesdashboards.perses.dev persesdatasources.perses.dev; do
-        wait_for_crd "$crd" 120 || {
-            echo "   ❌ CRD $crd not available. Please check Cluster Observability Operator installation."
-            return 1
-        }
+        if ! kubectl get crd "$crd" &>/dev/null; then
+            MISSING_CRDS="$MISSING_CRDS $crd"
+        fi
     done
+    if [ -n "$MISSING_CRDS" ]; then
+        echo "   ⚠️  Perses CRDs not available:$MISSING_CRDS"
+        echo "   Skipping Perses dashboards."
+        return 0
+    fi
 
     # Deploy UIPlugin (enables Perses in OpenShift Console)
     echo "   Enabling Perses UIPlugin..."
