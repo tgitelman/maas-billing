@@ -141,17 +141,17 @@ To import into Grafana:
 
 | Metric | Description | Labels |
 |--------|-------------|--------|
-| `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name`, `user` |
+| `istio_request_duration_milliseconds_bucket` | Gateway-level latency histogram | `destination_service_name`, `tier` |
 | `vllm:e2e_request_latency_seconds` | Model inference latency | `model_name` |
 
-#### Per-User Latency Tracking
+#### Per-Tier Latency Tracking
 
-The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to gateway latency metrics. This enables tracking request latency per authenticated user.
+The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to gateway latency metrics. This enables tracking request latency per access tier (e.g. free, premium, enterprise).
 
 **How it works:**
 
-1. The `gateway-auth-policy` injects the `X-MaaS-Username` header from the authenticated identity
-2. The Istio Telemetry resource extracts this header and adds it as a `user` label to the `REQUEST_DURATION` metric
+1. The `gateway-auth-policy` injects the `X-MaaS-Tier` header from the resolved tier (`auth.metadata.matchedTier["tier"]`)
+2. The Istio Telemetry resource extracts this header and adds it as a `tier` label to the `REQUEST_DURATION` metric
 3. Prometheus scrapes these metrics from the Istio gateway
 
 **Configuration** (`deployment/base/observability/istio-telemetry.yaml`):
@@ -160,7 +160,7 @@ The MaaS Platform uses an Istio Telemetry resource to add a `user` dimension to 
 apiVersion: telemetry.istio.io/v1
 kind: Telemetry
 metadata:
-  name: latency-per-user
+  name: latency-per-tier
   namespace: openshift-ingress
 spec:
   selector:
@@ -174,21 +174,21 @@ spec:
         metric: REQUEST_DURATION
         mode: CLIENT_AND_SERVER
       tagOverrides:
-        user:
+        tier:
           operation: UPSERT
-          value: request.headers["x-maas-username"]
+          value: request.headers["x-maas-tier"]
 ```
 
 !!! note "Security"
-    The `X-MaaS-Username` header is injected by the AuthPolicy from the authenticated identity, not from client input. This prevents users from spoofing the header to manipulate metrics attribution.
+    The `X-MaaS-Tier` header is injected by the AuthPolicy (gateway-auth-policy) from the tier lookup, not from client input. Server-side injection prevents spoofing. The `X-MaaS-Username` header is also injected for backends that need it.
 
 ### Common Queries
 
     # Token consumption per user
     sum by (user) (authorized_hits)
 
-    # P99 latency per user (filter out unauthenticated requests)
-    histogram_quantile(0.99, sum by (user, le) (rate(istio_request_duration_milliseconds_bucket{user!="",user!="unknown"}[5m])))
+    # P99 latency per tier
+    histogram_quantile(0.99, sum by (tier, le) (rate(istio_request_duration_milliseconds_bucket{tier!=""}[5m])))
 
     # Request rate per tier
     sum by (tier) (rate(authorized_calls[5m]))
@@ -205,8 +205,8 @@ spec:
     # Rate limit violations by tier
     sum by (tier) (rate(limited_calls[5m]))
 
-!!! tip "Filtering Unauthenticated Requests"
-    For per-user latency queries, use `user!="",user!="unknown"` to exclude requests that failed authentication (where the `X-MaaS-Username` header was not injected or has a default value). Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
+!!! tip "Filtering by tier"
+    For per-tier latency queries, use `tier!=""` to exclude requests where the tier was not resolved. Token consumption metrics (`authorized_hits`, `authorized_calls`) from Limitador already only include successful requests.
 
 ## Known Limitations
 
@@ -221,9 +221,9 @@ Some dashboard features require upstream changes and are currently blocked:
 !!! note "Total Tokens vs Token Breakdown"
     Total token consumption per user **is available** via `authorized_hits{user="..."}`. The blocked feature is specifically the input/output token breakdown (prompt vs generation tokens) per user, which requires vLLM to accept user context in requests.
 
-### Available Per-User Metrics
+### Available Per-User and Per-Tier Metrics
 
 | Feature | Metric | Label |
 |---------|--------|-------|
-| **Latency per user** | `istio_request_duration_milliseconds_bucket` | `user` |
+| **Latency per tier** | `istio_request_duration_milliseconds_bucket` | `tier` |
 | **Token consumption per user** | `authorized_hits` | `user` |
