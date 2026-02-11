@@ -9,9 +9,10 @@
 # For Grafana dashboards, run the helper: ./scripts/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
 
 set -e
+set -o pipefail
 
 # Preflight checks
-for cmd in kubectl kustomize jq; do
+for cmd in kubectl kustomize jq yq; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "❌ Required command '$cmd' not found. Please install it first."
         exit 1
@@ -67,6 +68,9 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/components/observability"
 
+# Import shared helper functions (wait_for_crd, etc.)
+source "$SCRIPT_DIR/deployment-helpers.sh"
+
 # ==========================================
 # Stack Selection
 # ==========================================
@@ -77,30 +81,6 @@ echo ""
 echo "Target namespace: $NAMESPACE"
 echo ""
 
-# Helper function
-wait_for_crd() {
-    local crd="$1"
-    local timeout="${2:-120}"
-    echo "⏳ Waiting for CRD $crd (timeout: ${timeout}s)..."
-    local end_time=$((SECONDS + timeout))
-    while [ $SECONDS -lt $end_time ]; do
-        if kubectl get crd "$crd" &>/dev/null; then
-            # Pass remaining time, not full timeout
-            local remaining_time=$((end_time - SECONDS))
-            [ $remaining_time -lt 1 ] && remaining_time=1
-            if kubectl wait --for=condition=Established --timeout="${remaining_time}s" "crd/$crd" 2>/dev/null; then
-                return 0
-            else
-                echo "❌ CRD $crd failed to become Established"
-                return 1
-            fi
-        fi
-        sleep 2
-    done
-    echo "❌ Timed out waiting for CRD $crd"
-    return 1
-}
-
 # ==========================================
 # Step 1: Enable user-workload-monitoring
 # ==========================================
@@ -108,27 +88,14 @@ echo "1️⃣ Enabling user-workload-monitoring..."
 
 if kubectl get configmap cluster-monitoring-config -n openshift-monitoring &>/dev/null; then
     CURRENT_CONFIG=$(kubectl get configmap cluster-monitoring-config -n openshift-monitoring -o jsonpath='{.data.config\.yaml}' 2>/dev/null || echo "")
-    if echo "$CURRENT_CONFIG" | grep -q "enableUserWorkload: true"; then
+    CURRENT_VALUE=$(echo "$CURRENT_CONFIG" | yq '.enableUserWorkload // false' 2>/dev/null || echo "false")
+    if [ "$CURRENT_VALUE" = "true" ]; then
         echo "   ✅ user-workload-monitoring already enabled"
     else
         echo "   Patching cluster-monitoring-config to enable user-workload-monitoring..."
-        # Use patch to merge the setting, preserving any existing configuration
-        if [ -z "$CURRENT_CONFIG" ]; then
-            # ConfigMap exists but has no config.yaml data
-            kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
-                --type merge -p '{"data":{"config.yaml":"enableUserWorkload: true\n"}}'
-        elif echo "$CURRENT_CONFIG" | grep -q "enableUserWorkload:"; then
-            # ConfigMap has enableUserWorkload set to something other than true (e.g., false)
-            # Replace the existing value to avoid duplicate YAML keys
-            NEW_CONFIG=$(echo "$CURRENT_CONFIG" | sed 's/enableUserWorkload:.*/enableUserWorkload: true/')
-            kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
-                --type merge -p "{\"data\":{\"config.yaml\":$(echo "$NEW_CONFIG" | jq -Rs .)}}"
-        else
-            # ConfigMap exists with config but no enableUserWorkload setting - append it
-            NEW_CONFIG=$(printf '%s\nenableUserWorkload: true\n' "$CURRENT_CONFIG")
-            kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
-                --type merge -p "{\"data\":{\"config.yaml\":$(echo "$NEW_CONFIG" | jq -Rs .)}}"
-        fi
+        NEW_CONFIG=$(echo "$CURRENT_CONFIG" | yq '.enableUserWorkload = true')
+        kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
+            --type merge -p "{\"data\":{\"config.yaml\":$(echo "$NEW_CONFIG" | jq -Rs .)}}"
         echo "   ✅ user-workload-monitoring enabled (existing config preserved)"
     fi
 else
@@ -173,29 +140,29 @@ BASE_OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/base/observability"
 if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     kustomize build "$BASE_OBSERVABILITY_DIR" | kubectl apply -f -
     echo "   ✅ TelemetryPolicy and Istio Telemetry deployed"
+
+    # Deploy Limitador ServiceMonitor only if Kuadrant's own PodMonitor is NOT present.
+    # When Kuadrant CR has spec.observability.enable=true, it creates kuadrant-limitador-monitor
+    # which scrapes the same Limitador pod. Deploying both causes duplicate metrics.
+    if kubectl get podmonitor kuadrant-limitador-monitor -n kuadrant-system &>/dev/null; then
+        echo "   ℹ️  Kuadrant PodMonitor detected - skipping Limitador ServiceMonitor (no duplicates)"
+    else
+        kubectl apply -f "$BASE_OBSERVABILITY_DIR/servicemonitor.yaml"
+        echo "   ✅ Limitador ServiceMonitor deployed (Kuadrant PodMonitor not found)"
+    fi
+
+    # Deploy Authorino server-metrics ServiceMonitor.
+    # The Kuadrant operator's authorino-operator-monitor only scrapes /metrics (controller-runtime).
+    # This additional ServiceMonitor scrapes /server-metrics for auth evaluation metrics
+    # (auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, etc.)
+    if kubectl get service -n kuadrant-system -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
+        kubectl apply -f "$BASE_OBSERVABILITY_DIR/authorino-server-metrics-servicemonitor.yaml"
+        echo "   ✅ Authorino /server-metrics ServiceMonitor deployed"
+    else
+        echo "   ⚠️  Authorino service not found - skipping Authorino server-metrics"
+    fi
 else
     echo "   ⚠️  Base observability directory not found - TelemetryPolicy may be missing!"
-fi
-
-# Deploy Limitador ServiceMonitor only if Kuadrant's own PodMonitor is NOT present.
-# When Kuadrant CR has spec.observability.enable=true, it creates kuadrant-limitador-monitor
-# which scrapes the same Limitador pod. Deploying both causes duplicate metrics.
-if kubectl get podmonitor kuadrant-limitador-monitor -n kuadrant-system &>/dev/null; then
-    echo "   ℹ️  Kuadrant PodMonitor detected - skipping Limitador ServiceMonitor (no duplicates)"
-else
-    kubectl apply -f "$BASE_OBSERVABILITY_DIR/servicemonitor.yaml"
-    echo "   ✅ Limitador ServiceMonitor deployed (Kuadrant PodMonitor not found)"
-fi
-
-# Deploy Authorino server-metrics ServiceMonitor.
-# The Kuadrant operator's authorino-operator-monitor only scrapes /metrics (controller-runtime).
-# This additional ServiceMonitor scrapes /server-metrics for auth evaluation metrics
-# (auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, etc.)
-if kubectl get service -n kuadrant-system -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
-    kubectl apply -f "$BASE_OBSERVABILITY_DIR/authorino-server-metrics-servicemonitor.yaml"
-    echo "   ✅ Authorino /server-metrics ServiceMonitor deployed"
-else
-    echo "   ⚠️  Authorino service not found - skipping Authorino server-metrics"
 fi
 
 # Deploy Istio Gateway metrics (if gateway exists)

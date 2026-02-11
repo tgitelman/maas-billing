@@ -48,14 +48,16 @@ The observability stack is defined in `deployment/base/observability/`. It inclu
 
 **Deploy observability** (after Gateway and AuthPolicy are in place, so `X-MaaS-Tier` is injected):
 
-    ./scripts/install-observability.sh
+    ./scripts/install-observability.sh [--namespace NAMESPACE]
 
 When using the full deployment script, this is applied automatically:
 
-    ./scripts/deploy-openshift.sh
+    ./scripts/deploy.sh
 
 !!! note "Prerequisites"
-    Gateway, AuthPolicy (gateway-auth-policy), and tier lookup must be deployed first. The AuthPolicy injects `X-MaaS-Tier`, which Istio Telemetry reads to label latency by tier. Without it, the `tier` label on gateway latency will be empty.
+    - **Tools**: `kubectl`, `kustomize`, `jq`, `yq` must be installed
+    - **Cluster state**: Gateway, AuthPolicy (gateway-auth-policy), and tier lookup must be deployed first. The AuthPolicy injects `X-MaaS-Tier`, which Istio Telemetry reads to label latency by tier. Without it, the `tier` label on gateway latency will be empty.
+    - **Namespace**: Use `--namespace` if your MaaS API is deployed to a namespace other than `maas-api` (e.g. `--namespace opendatahub`)
 
 **Optional:** To scrape the Istio gateway (Envoy) metrics, use the ServiceMonitor in `deployment/components/observability/monitors/` if your deployment includes that component.
 
@@ -275,12 +277,26 @@ Provides a comprehensive view of system health, usage across all users, and reso
 | **Component Health** | Limitador up, Authorino pods, MaaS API pods, Gateway pods, Firing Alerts |
 | **Key Metrics** | Total Tokens, Total Requests, Token Rate, Request Rate, Inference Success Rate, Active Users, P50 Response Latency, Rate Limit Ratio |
 | **Auth Evaluation** | Auth Evaluation Latency (P50/P95/P99), Auth Success/Deny Rate |
-| **Traffic Analysis** | Token/Request Rate by Model, Error Rates, Token/Request Rate by Tier, P95 Latency |
+| **Traffic Analysis** | Token/Request Rate by Model, Error Rates (4xx excl. 429, 5xx, 429 Rate Limited), Token/Request Rate by Tier, P95 Latency |
 | **Error Breakdown** | Rate Limited Requests, Unauthorized Requests |
 | **Model Metrics** | vLLM queue depth, inference latency, KV cache usage, token throughput, prompt vs generation token ratio, queue wait time, TTFT, ITL |
 | **Top Users** | By token usage, by declined requests |
 | **Detailed Breakdown** | Token Rate by User, Request Volume by User & Tier |
 | **Resource Allocation** | CPU/Memory/GPU per model pod |
+
+!!! note "Template Variables"
+    The Platform Admin dashboard uses Grafana template variables for namespace filtering instead of hardcoded values. This allows the dashboard to adapt to different deployment configurations:
+
+    | Variable | Default | Description |
+    |----------|---------|-------------|
+    | `$datasource` | `prometheus` | Prometheus datasource |
+    | `$maas_namespace` | auto-detected | MaaS API namespace (auto-detected from `kube_pod_info{pod=~"maas-api.*"}`) |
+    | `$kuadrant_namespace` | `kuadrant-system` | Kuadrant components namespace |
+    | `$gateway_namespace` | `openshift-ingress` | Istio/Gateway namespace |
+    | `$llm_namespace` | `llm` | LLM model pods namespace |
+    | `$model` | `All` | Filter by model name |
+
+    To customize for your environment, change the variable values in Grafana's dashboard settings (gear icon → Variables).
 
 #### AI Engineer Dashboard
 
@@ -288,9 +304,12 @@ Personal usage view for individual developers:
 
 | Section | Metrics |
 |---------|---------|
-| **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Request Success Rate |
+| **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Inference Success Rate |
 | **Usage Trends** | Token Usage by Model, Usage Trends (tokens vs rate limited) |
 | **Detailed Analysis** | Token Volume by Model, Rate Limited by Tier |
+
+!!! note "Inference Success Rate"
+    Both dashboards use `rate()` on vLLM counters (`request_success_total`, `e2e_request_latency_seconds_count`) instead of raw counter values. This handles pod restarts correctly (counters reset independently and raw division produces incorrect results). When no traffic is present, `rate()/rate()` produces `NaN`; the dashboards use `((ratio) >= 0) OR vector(1)` to filter `NaN` and default to 100% (healthy) when no traffic exists.
 
 !!! info "Tokens vs Requests"
     Both dashboards show **token consumption** (`authorized_hits`) for billing/cost tracking and **request counts** (`authorized_calls`) for capacity planning. Blue panels indicate request metrics; green panels indicate token metrics.
@@ -427,8 +446,9 @@ The MaaS Platform uses an Istio Telemetry resource to add a `tier` dimension to 
 
 **Inference success rate** (system health — did requests that reached the model succeed?):
 
-    # Inference success rate (requests completed / requests processed by model)
-    (sum(vllm:request_success_total) / sum(vllm:e2e_request_latency_seconds_count)) OR vector(1)
+    # Inference success rate using rate() to handle counter resets correctly
+    # The >= 0 filter removes NaN (0/0 when no traffic), falling back to vector(1) = 100%
+    ((sum(rate(vllm:request_success_total[5m])) / sum(rate(vllm:e2e_request_latency_seconds_count[5m]))) >= 0) OR vector(1)
 
 **Rate limiting metrics** (capacity planning — are users exceeding their quotas?):
 

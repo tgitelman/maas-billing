@@ -74,7 +74,7 @@ spec:
           "id": 11,
           "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "count(kube_pod_status_phase{namespace=\"kuadrant-system\", pod=~\"authorino.*\", phase=\"Running\"}) OR vector(0)", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "count(kube_pod_status_phase{namespace=~\"$kuadrant_namespace\", pod=~\"authorino.*\", phase=\"Running\"}) OR vector(0)", "instant": true, "refId": "A"}],
           "description": "Count of running Authorino pods (authentication/authorization service). Should be >= 1.",
           "title": "🔐 Authorino",
           "type": "stat"
@@ -114,7 +114,7 @@ spec:
           "id": 13,
           "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "count(kube_pod_status_phase{namespace=\"openshift-ingress\", pod=~\"maas-default-gateway.*\", phase=\"Running\"} == 1) OR on() vector(0)", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "count(kube_pod_status_phase{namespace=~\"$gateway_namespace\", pod=~\"maas-default-gateway.*\", phase=\"Running\"} == 1) OR on() vector(0)", "instant": true, "refId": "A"}],
           "description": "Count of running Istio Gateway pods. These are the entry point for all API traffic.",
           "title": "🚪 Gateway Pods",
           "type": "stat"
@@ -134,7 +134,7 @@ spec:
           "id": 200,
           "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "count(ALERTS{alertstate=\"firing\", alertname!=\"Watchdog\", namespace=~\"llm|kuadrant-system|maas-api|envoy-gateway-system\"}) OR vector(0)", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "count(ALERTS{alertstate=\"firing\", alertname!=\"Watchdog\", namespace=~\"$llm_namespace|$kuadrant_namespace|$maas_namespace|envoy-gateway-system\"}) OR vector(0)", "instant": true, "refId": "A"}],
           "description": "Number of currently firing Prometheus alerts for MaaS components. 0 = healthy.",
           "title": "🚨 Firing Alerts",
           "type": "stat"
@@ -159,7 +159,7 @@ spec:
           "id": 201,
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "ALERTS{alertstate=\"firing\", alertname!=\"Watchdog\", namespace=~\"llm|kuadrant-system|maas-api|envoy-gateway-system\"}", "format": "table", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "ALERTS{alertstate=\"firing\", alertname!=\"Watchdog\", namespace=~\"$llm_namespace|$kuadrant_namespace|$maas_namespace|envoy-gateway-system\"}", "format": "table", "instant": true, "refId": "A"}],
           "description": "List of currently firing Prometheus alerts for MaaS-related namespaces. Excludes the 'Watchdog' heartbeat alert.",
           "title": "📋 Active Alerts",
           "transformations": [{"id": "organize", "options": {"excludeByName": {"Time": true, "Value": true, "__name__": true, "alertstate": true}, "indexByName": {"alertname": 0, "severity": 1, "namespace": 2}, "renameByName": {}}}],
@@ -260,7 +260,7 @@ spec:
           "id": 4,
           "options": {"orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true, "text": {}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "(sum(vllm:request_success_total) / sum(vllm:e2e_request_latency_seconds_count)) OR vector(1)", "instant": true, "refId": "A"}],
+          "targets": [{"expr": "((sum(rate(vllm:request_success_total[5m])) / sum(rate(vllm:e2e_request_latency_seconds_count[5m]))) >= 0) OR vector(1)", "instant": true, "refId": "A"}],
           "description": "Model inference success rate: requests that completed successfully / total requests that reached the model. Rate-limited requests (429) are excluded — they never reach the model and are tracked separately in the Rate Limit Ratio panel.",
           "title": "✅ Inference Success Rate",
           "type": "gauge"
@@ -328,8 +328,8 @@ spec:
           "id": 6,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "sum(rate(istio_requests_total{response_code=~\"4..\"}[5m])) OR vector(0)", "legendFormat": "4xx Errors", "refId": "A"}, {"expr": "sum(rate(istio_requests_total{response_code=~\"5..\"}[5m])) OR vector(0)", "legendFormat": "5xx Errors", "refId": "B"}, {"expr": "sum(rate(limited_calls[5m])) OR vector(0)", "legendFormat": "429 Rate Limited", "refId": "C"}],
-          "description": "Error rates by type. 4xx = client errors (401 auth, 400 bad request), 5xx = server errors, Rate Limited = 429 quota exceeded.",
+          "targets": [{"expr": "sum(rate(istio_requests_total{response_code=~\"4..\", response_code!=\"429\"}[5m])) OR vector(0)", "legendFormat": "4xx Errors (excl. 429)", "refId": "A"}, {"expr": "sum(rate(istio_requests_total{response_code=~\"5..\"}[5m])) OR vector(0)", "legendFormat": "5xx Errors", "refId": "B"}, {"expr": "sum(rate(limited_calls[5m])) OR vector(0)", "legendFormat": "429 Rate Limited", "refId": "C"}],
+          "description": "Error rates by type. 4xx = client errors excluding 429 (401 auth, 400 bad request), 5xx = server errors, Rate Limited = 429 quota exceeded (from Limitador).",
           "title": "❌ Overall Error Rate",
           "type": "timeseries"
         },
@@ -636,7 +636,7 @@ spec:
           "id": 29,
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Memory Requests"}]},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "max by (pod) (kube_pod_container_resource_requests{namespace=\"llm\", resource=\"cpu\"})", "format": "table", "instant": true, "refId": "A"}, {"expr": "max by (pod) (kube_pod_container_resource_limits{namespace=\"llm\", resource=\"cpu\"})", "format": "table", "instant": true, "refId": "B"}, {"expr": "max by (pod) (kube_pod_container_resource_requests{namespace=\"llm\", resource=\"memory\"})", "format": "table", "instant": true, "refId": "C"}, {"expr": "max by (pod) (kube_pod_container_resource_limits{namespace=\"llm\", resource=\"memory\"})", "format": "table", "instant": true, "refId": "D"}, {"expr": "max by (pod) (kube_pod_container_resource_requests{namespace=\"llm\", resource=~\"nvidia.com/gpu|amd.com/gpu\"})", "format": "table", "instant": true, "refId": "E"}],
+          "targets": [{"expr": "max by (pod) (kube_pod_container_resource_requests{namespace=~\"$llm_namespace\", resource=\"cpu\"})", "format": "table", "instant": true, "refId": "A"}, {"expr": "max by (pod) (kube_pod_container_resource_limits{namespace=~\"$llm_namespace\", resource=\"cpu\"})", "format": "table", "instant": true, "refId": "B"}, {"expr": "max by (pod) (kube_pod_container_resource_requests{namespace=~\"$llm_namespace\", resource=\"memory\"})", "format": "table", "instant": true, "refId": "C"}, {"expr": "max by (pod) (kube_pod_container_resource_limits{namespace=~\"$llm_namespace\", resource=\"memory\"})", "format": "table", "instant": true, "refId": "D"}, {"expr": "max by (pod) (kube_pod_container_resource_requests{namespace=~\"$llm_namespace\", resource=~\"nvidia.com/gpu|amd.com/gpu\"})", "format": "table", "instant": true, "refId": "E"}],
           "title": "📦 Resource Allocation per Model",
           "description": "Resource requests/limits for LLM model pods. GPU column shows requested GPUs (nvidia.com/gpu or amd.com/gpu). For GPU utilization metrics, DCGM Exporter must be installed. See 'GPU Cache Usage' panel above for vLLM's KV-cache utilization.",
           "type": "table",
@@ -699,7 +699,10 @@ spec:
       "templating": {
         "list": [
           {"current": {"selected": true, "text": "prometheus", "value": "prometheus"}, "hide": 0, "includeAll": false, "label": "Datasource", "name": "datasource", "options": [], "query": "prometheus", "refresh": 1, "type": "datasource"},
-          {"current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)", "description": "Auto-detected namespace where MaaS API is deployed", "hide": 0, "includeAll": true, "allValue": ".*", "label": "MaaS Namespace", "multi": false, "name": "maas_namespace", "options": [], "query": {"qryType": 1, "query": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"},
+          {"current": {"selected": false, "text": "maas-api", "value": "maas-api"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)", "description": "Auto-detected namespace where MaaS API is deployed", "hide": 0, "includeAll": false, "label": "MaaS Namespace", "multi": false, "name": "maas_namespace", "options": [], "query": {"qryType": 1, "query": "label_values(kube_pod_info{pod=~\"maas-api.*\"}, namespace)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"},
+          {"current": {"selected": false, "text": "kuadrant-system", "value": "kuadrant-system"}, "description": "Namespace where Kuadrant (Authorino, Limitador) is deployed", "hide": 0, "label": "Kuadrant Namespace", "name": "kuadrant_namespace", "options": [{"selected": true, "text": "kuadrant-system", "value": "kuadrant-system"}], "query": "kuadrant-system", "skipUrlSync": false, "type": "textbox"},
+          {"current": {"selected": false, "text": "openshift-ingress", "value": "openshift-ingress"}, "description": "Namespace where the Istio/Gateway pods run", "hide": 0, "label": "Gateway Namespace", "name": "gateway_namespace", "options": [{"selected": true, "text": "openshift-ingress", "value": "openshift-ingress"}], "query": "openshift-ingress", "skipUrlSync": false, "type": "textbox"},
+          {"current": {"selected": false, "text": "llm", "value": "llm"}, "description": "Namespace where LLM model pods are deployed", "hide": 0, "label": "LLM Namespace", "name": "llm_namespace", "options": [{"selected": true, "text": "llm", "value": "llm"}], "query": "llm", "skipUrlSync": false, "type": "textbox"},
           {"current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(vllm:num_requests_running, model_name)", "description": "Filter by model", "hide": 0, "includeAll": true, "allValue": ".*", "label": "Model", "multi": true, "name": "model", "options": [], "query": {"qryType": 1, "query": "label_values(vllm:num_requests_running, model_name)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"}
         ]
       },
