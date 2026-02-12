@@ -1,4 +1,6 @@
-# Kubernetes Ingress for external access to Grafana dashboard
+# OpenShift Route for external access to Grafana dashboard.
+# Standalone kustomize deployments only (kubectl apply -k).
+# Not used by install scripts — the Grafana Operator creates its own route.
 ---
 apiVersion: route.openshift.io/v1
 kind: Route

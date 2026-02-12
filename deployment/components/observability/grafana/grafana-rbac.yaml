@@ -1,4 +1,5 @@
-# RBAC for Grafana to access Prometheus/Thanos metrics
+# RBAC for Grafana to access Prometheus/Thanos metrics.
+# Used by both standalone (kustomize) and script-driven (install-observability.sh) paths.
 # NOTE: ServiceAccount 'grafana-sa' is created by the Grafana operator, not here.
 # Creating it manually causes "already exists" errors when operator tries to create it.
 ---

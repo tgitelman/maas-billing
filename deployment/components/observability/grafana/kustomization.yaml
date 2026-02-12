@@ -9,8 +9,12 @@ metadata:
 namespace: maas-api
 
 resources:
+  # Standalone mode: Grafana instance and configuration
   - grafana-instance.yaml
   - grafana-rbac.yaml
-  # grafana-datasource.yaml is NOT included here - it's deployed by
+  # grafana-datasource.yaml is NOT included here — it's deployed by
   # install-observability.sh with proper authentication token injection
-  - route.yaml
+  - grafana-route.yaml
+  # Both modes: Dashboards (for script-driven, use install-grafana-dashboards.sh)
+  - dashboards/dashboard-platform-admin.yaml
+  - dashboards/dashboard-ai-engineer.yaml

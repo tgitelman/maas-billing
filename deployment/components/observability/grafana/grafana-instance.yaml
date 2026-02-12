@@ -1,3 +1,6 @@
+# Grafana instance for standalone kustomize deployments (kubectl apply -k).
+# Not used by install-observability.sh or install-grafana-dashboards.sh —
+# those scripts assume Grafana is already installed (e.g. via Grafana Operator).
 kind: Grafana
 apiVersion: grafana.integreatly.org/v1beta1
 metadata:
