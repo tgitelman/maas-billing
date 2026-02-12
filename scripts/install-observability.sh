@@ -72,6 +72,33 @@ OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/components/observability"
 source "$SCRIPT_DIR/deployment-helpers.sh"
 
 # ==========================================
+# Local Helper Functions
+# ==========================================
+
+# kuadrant_already_scrapes endpoint namespace
+#   Checks if any Kuadrant-provided ServiceMonitor or PodMonitor already scrapes
+#   the given endpoint path. Used to avoid deploying duplicate monitors.
+#   Excludes MaaS-owned monitors (labeled app.kubernetes.io/part-of: maas-observability)
+#   so re-runs of this script don't falsely detect our own monitors.
+#
+# Arguments:
+#   endpoint  - The metrics path to check for (e.g. "/server-metrics", "/metrics")
+#   namespace - The namespace to search in (default: kuadrant-system)
+#
+# Returns:
+#   0 if a Kuadrant-provided monitor already scrapes this endpoint
+#   1 if no existing monitor scrapes it (safe to deploy ours)
+kuadrant_already_scrapes() {
+    local endpoint="$1"
+    local namespace="${2:-kuadrant-system}"
+
+    # Get all monitors, exclude MaaS-owned ones, check for the endpoint path
+    kubectl get servicemonitor,podmonitor -n "$namespace" \
+        -l 'app.kubernetes.io/part-of!=maas-observability' \
+        -o json 2>/dev/null | grep -q "\"${endpoint}\""
+}
+
+# ==========================================
 # Stack Selection
 # ==========================================
 echo "========================================="
@@ -141,11 +168,12 @@ if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     kustomize build "$BASE_OBSERVABILITY_DIR" | kubectl apply -f -
     echo "   ✅ TelemetryPolicy and Istio Telemetry deployed"
 
-    # Deploy Limitador ServiceMonitor only if Kuadrant's own PodMonitor is NOT present.
+    # Deploy Limitador ServiceMonitor only if Kuadrant doesn't already scrape /metrics from Limitador.
     # When Kuadrant CR has spec.observability.enable=true, it creates kuadrant-limitador-monitor
     # which scrapes the same Limitador pod. Deploying both causes duplicate metrics.
-    if kubectl get podmonitor kuadrant-limitador-monitor -n kuadrant-system &>/dev/null; then
-        echo "   ℹ️  Kuadrant PodMonitor detected - skipping Limitador ServiceMonitor (no duplicates)"
+    if kuadrant_already_scrapes "/metrics" kuadrant-system \
+       || kubectl get podmonitor kuadrant-limitador-monitor -n kuadrant-system &>/dev/null; then
+        echo "   ℹ️  Kuadrant already scrapes Limitador /metrics - skipping MaaS ServiceMonitor (no duplicates)"
     else
         kubectl apply -f "$BASE_OBSERVABILITY_DIR/servicemonitor.yaml"
         echo "   ✅ Limitador ServiceMonitor deployed (Kuadrant PodMonitor not found)"
@@ -155,11 +183,13 @@ if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     # The Kuadrant operator's authorino-operator-monitor only scrapes /metrics (controller-runtime).
     # This additional ServiceMonitor scrapes /server-metrics for auth evaluation metrics
     # (auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, etc.)
-    if kubectl get service -n kuadrant-system -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
+    if ! kubectl get service -n kuadrant-system -l authorino-resource=authorino,control-plane=controller-manager &>/dev/null 2>&1; then
+        echo "   ⚠️  Authorino service not found - skipping Authorino server-metrics"
+    elif kuadrant_already_scrapes "/server-metrics"; then
+        echo "   ℹ️  Kuadrant already scrapes Authorino /server-metrics - skipping MaaS ServiceMonitor (no duplicates)"
+    else
         kubectl apply -f "$BASE_OBSERVABILITY_DIR/authorino-server-metrics-servicemonitor.yaml"
         echo "   ✅ Authorino /server-metrics ServiceMonitor deployed"
-    else
-        echo "   ⚠️  Authorino service not found - skipping Authorino server-metrics"
     fi
 else
     echo "   ⚠️  Base observability directory not found - TelemetryPolicy may be missing!"

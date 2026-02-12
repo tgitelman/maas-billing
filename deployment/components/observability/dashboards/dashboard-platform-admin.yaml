@@ -524,7 +524,7 @@ spec:
           "id": 50,
           "options": {"legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
           "pluginVersion": "11.3.0",
-          "targets": [{"expr": "(sum by (model_name) (rate(vllm:request_prompt_tokens_sum{model_name=~\"$model\"}[5m]))) / (sum by (model_name) (rate(vllm:request_prompt_tokens_sum{model_name=~\"$model\"}[5m])) + sum by (model_name) (rate(vllm:request_generation_tokens_sum{model_name=~\"$model\"}[5m])))", "legendFormat": "{{model_name}}", "refId": "A"}],
+          "targets": [{"expr": "(sum by (model_name) (rate(vllm:request_prompt_tokens_sum{model_name=~\"$model\"}[5m]))) / clamp_min(sum by (model_name) (rate(vllm:request_prompt_tokens_sum{model_name=~\"$model\"}[5m])) + sum by (model_name) (rate(vllm:request_generation_tokens_sum{model_name=~\"$model\"}[5m])), 1e-9) and (sum by (model_name) (rate(vllm:request_prompt_tokens_sum{model_name=~\"$model\"}[5m])) + sum by (model_name) (rate(vllm:request_generation_tokens_sum{model_name=~\"$model\"}[5m]))) > 0", "legendFormat": "{{model_name}}", "refId": "A"}],
           "title": "📊 Prompt vs Generation Token Ratio",
           "type": "timeseries"
         },
@@ -574,7 +574,7 @@ spec:
         },
         {
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
-          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": []},
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "short"}, "overrides": [{"matcher": {"id": "byName", "options": "user"}, "properties": [{"id": "displayName", "value": "👤 User"}]}, {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "displayName", "value": "📊 Hits"}]}]},
           "gridPos": {"h": 7, "w": 24, "x": 0, "y": 101},
           "id": 34,
           "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "📊 Hits"}]},

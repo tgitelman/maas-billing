@@ -214,13 +214,13 @@ ServiceMonitors are deployed by `install-observability.sh` to configure OpenShif
 
 **Automatically Deployed:**
 
-- **Istio Gateway**: Scrapes Envoy metrics from the MaaS gateway in `openshift-ingress`
+- **Istio Gateway**: Scrapes Envoy metrics from the MaaS gateway in `openshift-ingress` (deployed if the gateway exists)
 - **KServe LLM Models**: Scrapes vLLM metrics from model pods in the `llm` namespace (deployed if the `llm` namespace exists)
-- **Authorino Server Metrics** (`authorino-server-metrics-servicemonitor.yaml`): Scrapes auth evaluation metrics from Authorino's `/server-metrics` endpoint in `kuadrant-system`. This collects `auth_server_authconfig_duration_seconds`, `auth_server_authconfig_response_status`, and other auth server metrics that are **not** scraped by the Kuadrant-provided `authorino-operator-monitor` (which only covers `/metrics` for controller-runtime stats).
 
-**Conditionally Deployed:**
+**Conditionally Deployed (auto-detected by `install-observability.sh`):**
 
-- **Limitador** (`servicemonitor.yaml`): Scrapes rate limiting metrics from Limitador pods in `kuadrant-system`. **Only deployed when Kuadrant's own PodMonitor is not present.** When Kuadrant CR has `spec.observability.enable: true`, the operator creates its own `kuadrant-limitador-monitor` PodMonitor that scrapes the same Limitador pod. Deploying both would cause duplicate metrics. The install script auto-detects this.
+- **Limitador** (`servicemonitor.yaml`): Scrapes rate limiting metrics from Limitador pods in `kuadrant-system`. **Skipped when Kuadrant's own PodMonitor is already present.** When Kuadrant CR has `spec.observability.enable: true`, the operator creates its own `kuadrant-limitador-monitor` PodMonitor that scrapes the same Limitador pod. Deploying both would cause duplicate metrics.
+- **Authorino Server Metrics** (`authorino-server-metrics-servicemonitor.yaml`): Scrapes auth evaluation metrics from Authorino's `/server-metrics` endpoint in `kuadrant-system`. **Skipped if a Kuadrant-provided monitor already scrapes `/server-metrics`.** This collects `auth_server_authconfig_duration_seconds`, `auth_server_authconfig_response_status`, and other auth server metrics that are **not** scraped by the Kuadrant-provided `authorino-operator-monitor` (which only covers `/metrics` for controller-runtime stats).
 
 **Already Provided by Kuadrant (when `observability.enable: true`):**
 
@@ -228,7 +228,7 @@ ServiceMonitors are deployed by `install-observability.sh` to configure OpenShif
 - **Authorino Operator Monitor** (`authorino-operator-monitor`): Scrapes Authorino controller metrics from `/metrics` only
 
 !!! note "Authorino Metrics Coverage"
-    The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime stats). The MaaS `authorino-server-metrics` ServiceMonitor supplements this by scraping `/server-metrics` for auth evaluation metrics (`auth_server_authconfig_duration_seconds`, `auth_server_authconfig_response_status`, etc.). If a future Kuadrant update begins scraping `/server-metrics` natively, the MaaS ServiceMonitor should be removed to avoid duplicates. See [Authorino Observability](https://docs.kuadrant.io/1.0.x/authorino/docs/user-guides/observability/) for details.
+    The Kuadrant-provided `authorino-operator-monitor` only scrapes `/metrics` (controller-runtime stats). The MaaS `authorino-server-metrics` ServiceMonitor supplements this by scraping `/server-metrics` for auth evaluation metrics (`auth_server_authconfig_duration_seconds`, `auth_server_authconfig_response_status`, etc.). The `install-observability.sh` script auto-detects whether a Kuadrant-provided monitor already scrapes `/server-metrics` and skips deploying the MaaS ServiceMonitor to avoid duplicates. See [Authorino Observability](https://docs.kuadrant.io/1.0.x/authorino/docs/user-guides/observability/) for details.
 
 ## High Availability for MaaS Metrics
 
