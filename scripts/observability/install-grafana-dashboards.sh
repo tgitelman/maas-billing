@@ -73,7 +73,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/components/observability"
 
 # ==========================================
@@ -144,7 +144,7 @@ echo "   ✅ One Grafana instance found: $GRAFANA_NAME in namespace $TARGET_NS"
 # ==========================================
 echo ""
 echo "📊 Deploying MaaS dashboard definitions to namespace $TARGET_NS..."
-kustomize build "$OBSERVABILITY_DIR/dashboards" | \
+kustomize build "$OBSERVABILITY_DIR/grafana" | \
     sed "s/namespace: maas-api/namespace: $TARGET_NS/g" | \
     kubectl apply -f -
 

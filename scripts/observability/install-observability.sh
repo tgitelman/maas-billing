@@ -6,7 +6,7 @@
 # This script is idempotent - safe to run multiple times
 #
 # Usage: ./install-observability.sh [--namespace NAMESPACE]
-# For Grafana dashboards, run the helper: ./scripts/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
+# For Grafana dashboards, run the helper: ./scripts/observability/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
 
 set -e
 set -o pipefail
@@ -65,11 +65,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/components/observability"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Import shared helper functions (wait_for_crd, etc.)
-source "$SCRIPT_DIR/deployment-helpers.sh"
+source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # ==========================================
 # Local Helper Functions
@@ -175,7 +174,7 @@ if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
        || kubectl get podmonitor kuadrant-limitador-monitor -n kuadrant-system &>/dev/null; then
         echo "   ℹ️  Kuadrant already scrapes Limitador /metrics - skipping MaaS ServiceMonitor (no duplicates)"
     else
-        kubectl apply -f "$BASE_OBSERVABILITY_DIR/servicemonitor.yaml"
+        kubectl apply -f "$BASE_OBSERVABILITY_DIR/limitador-servicemonitor.yaml"
         echo "   ✅ Limitador ServiceMonitor deployed (Kuadrant PodMonitor not found)"
     fi
 
@@ -197,8 +196,8 @@ fi
 
 # Deploy Istio Gateway metrics (if gateway exists)
 if kubectl get deploy -n openshift-ingress maas-default-gateway-openshift-default &>/dev/null; then
-    kubectl apply -f "$OBSERVABILITY_DIR/monitors/istio-gateway-service.yaml"
-    kubectl apply -f "$OBSERVABILITY_DIR/monitors/istio-gateway-servicemonitor.yaml"
+    kubectl apply -f "$BASE_OBSERVABILITY_DIR/istio-gateway-service.yaml"
+    kubectl apply -f "$BASE_OBSERVABILITY_DIR/istio-gateway-servicemonitor.yaml"
     echo "   ✅ Istio Gateway metrics configured"
 else
     echo "   ⚠️  Istio Gateway not found - skipping Istio metrics"
