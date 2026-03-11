@@ -11,6 +11,19 @@ wait_for_perses_crds() {
   echo "   Waiting for Perses CRDs..."
   local failures=0
   for crd in "perses.perses.dev" "persesdashboards.perses.dev" "persesdatasources.perses.dev"; do
+    local crd_exists=false
+    for _ in $(seq 1 30); do
+      if kubectl get "crd/$crd" >/dev/null 2>&1; then
+        crd_exists=true
+        break
+      fi
+      sleep 2
+    done
+    if [ "$crd_exists" = "false" ]; then
+      echo "   ⚠️  CRD $crd not found after 60s"
+      failures=$((failures + 1))
+      continue
+    fi
     if ! kubectl wait --for=condition=Established "crd/$crd" --timeout=60s 2>/dev/null; then
       echo "   ⚠️  CRD $crd not yet established"
       failures=$((failures + 1))
@@ -41,7 +54,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --kubernetes)  OCP=false ; shift ;;
     -h|--help) usage ;;
-    *) echo "❌ Unknown option: $1"; echo "Use --help for usage information"; exit 1 ;;
+    *) echo "❌ Unknown option: '$1'"; echo "Use --help for usage information"; exit 1 ;;
   esac
 done
 
@@ -90,7 +103,9 @@ EOF
       APPROVED=$(kubectl get installplan "$INSTALL_PLAN" -n openshift-operators -o jsonpath='{.spec.approved}' 2>/dev/null || true)
       if [ "$APPROVED" = "false" ]; then
         echo "   ⚠️  Install plan $INSTALL_PLAN requires approval, auto-approving..."
-        kubectl patch installplan "$INSTALL_PLAN" -n openshift-operators --type merge -p '{"spec":{"approved":true}}' || true
+        if ! kubectl patch installplan "$INSTALL_PLAN" -n openshift-operators --type merge -p '{"spec":{"approved":true}}'; then
+          echo "   ⚠️  Failed to approve install plan $INSTALL_PLAN"
+        fi
       fi
     fi
     
@@ -127,16 +142,24 @@ EOF
 else
   echo "Installing Perses via Helm for vanilla Kubernetes..."
   
-  # Check if Perses is already installed
-  if kubectl get deployment perses -n perses 2>/dev/null | grep -q perses; then
-    echo "✅ Perses already installed"
-    echo "📊 Perses installation completed!"
-    exit 0
+  # Check if Perses is already installed and healthy
+  if kubectl get deployment perses -n perses >/dev/null 2>&1; then
+    if kubectl rollout status deployment/perses -n perses --timeout=60s >/dev/null 2>&1; then
+      echo "✅ Perses already installed and available"
+      echo "📊 Perses installation completed!"
+      exit 0
+    fi
+    echo "⚠️  Existing Perses deployment found but not healthy, proceeding with reinstall..."
   fi
   
   # Add Perses Helm repo
-  helm repo add perses https://perses.github.io/helm-charts 2>/dev/null || true
-  helm repo update
+  # Helm uses the 'perses' namespace for vanilla Kubernetes.
+  # The standalone kustomize path (kubectl apply -k) uses the 'maas-api' namespace.
+  # These are mutually exclusive deployment methods.
+  if ! helm repo list 2>/dev/null | grep -q "^perses[[:space:]]"; then
+    helm repo add perses https://perses.github.io/helm-charts
+  fi
+  helm repo update perses
   
   # Install Perses
   helm upgrade --install perses perses/perses \
@@ -144,6 +167,9 @@ else
     --create-namespace \
     --wait \
     --timeout 5m
+  
+  # Wait for CRDs after Helm install
+  wait_for_perses_crds || exit 1
   
   echo "✅ Perses installed via Helm"
 fi

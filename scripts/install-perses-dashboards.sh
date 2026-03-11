@@ -9,8 +9,7 @@
 #
 # Usage: ./install-perses-dashboards.sh
 
-set -e
-set -o pipefail
+set -euo pipefail
 
 if ! command -v kubectl &>/dev/null; then
     echo "❌ Required command 'kubectl' not found. Please install it first."
@@ -55,8 +54,15 @@ OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/components/observability"
 echo "📊 MaaS Perses Dashboard Installation"
 echo ""
 
-if ! kubectl get crd persesdashboards.perses.dev &>/dev/null; then
-    echo "⚠️  Perses CRDs not found. Install the Cluster Observability Operator first."
+MISSING_CRDS=()
+for crd in persesdashboards.perses.dev persesdatasources.perses.dev; do
+    if ! kubectl get crd "$crd" &>/dev/null; then
+        MISSING_CRDS+=("$crd")
+    fi
+done
+if [ ${#MISSING_CRDS[@]} -gt 0 ]; then
+    echo "⚠️  Required Perses CRDs not found: ${MISSING_CRDS[*]}"
+    echo "   Install the Cluster Observability Operator first."
     echo "   Run:  ./scripts/installers/install-perses.sh"
     echo "   See:  https://docs.redhat.com/en/documentation/red_hat_openshift_cluster_observability_operator/1-latest/html/about_red_hat_openshift_cluster_observability_operator/index"
     exit 0
@@ -77,7 +83,7 @@ echo "   ✅ UIPlugin enabled"
 echo ""
 echo "⏳ Waiting for Perses instance..."
 for i in $(seq 1 30); do
-    PERSES_PODS=$(kubectl get pods -n openshift-operators -l app.kubernetes.io/name=perses --no-headers 2>/dev/null | grep -c Running || echo "0")
+    PERSES_PODS=$(kubectl get pods -n openshift-operators -l app.kubernetes.io/name=perses --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
     if [ "$PERSES_PODS" -ge 1 ]; then
         echo "   ✅ Perses pod is running in openshift-operators"
         break
@@ -102,10 +108,13 @@ echo "   ✅ Dashboards deployed (Platform Admin, AI Engineer, Usage)"
 
 echo ""
 echo "🔗 Configuring Prometheus datasource..."
-if kubectl apply -f "$OBSERVABILITY_DIR/perses/perses-datasource.yaml" -n openshift-operators 2>/dev/null; then
+if DATASOURCE_OUT=$(kubectl apply -f "$OBSERVABILITY_DIR/perses/perses-datasource.yaml" -n openshift-operators 2>&1); then
+    echo "   $DATASOURCE_OUT"
     echo "   ✅ Datasource configured"
 else
-    echo "   ⚠️  Datasource may already be configured"
+    echo "   ❌ Failed to configure datasource:"
+    echo "   $DATASOURCE_OUT"
+    exit 1
 fi
 
 # ==========================================

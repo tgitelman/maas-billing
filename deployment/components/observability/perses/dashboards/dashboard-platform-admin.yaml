@@ -94,7 +94,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Pods"
-                  query: count(kube_pod_status_phase{namespace=~"$kuadrant_namespace", pod=~"limitador.*", phase="Running"}) OR vector(0)
+                  query: count(kube_pod_status_phase{namespace=~"$kuadrant_namespace", pod=~"limitador.*", phase="Running"} == 1) OR on() vector(0)
 
     authorinoHealth:
       kind: Panel
@@ -115,7 +115,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Pods"
-                  query: count(kube_pod_status_phase{namespace=~"$kuadrant_namespace", pod=~"authorino.*", phase="Running"}) OR vector(0)
+                  query: count(kube_pod_status_phase{namespace=~"$kuadrant_namespace", pod=~"authorino.*", phase="Running"} == 1) OR on() vector(0)
 
     maasApiPods:
       kind: Panel
@@ -178,7 +178,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Alerts"
-                  query: count(ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"$llm_namespace|$kuadrant_namespace|$maas_namespace|envoy-gateway-system"}) OR vector(0)
+                  query: count(ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"$llm_namespace|$kuadrant_namespace|$maas_namespace|$gateway_namespace"}) OR vector(0)
 
     activeAlertsTable:
       kind: Panel
@@ -187,16 +187,36 @@ spec:
           name: "📋 Active Alerts"
           description: "Currently firing Prometheus alerts for MaaS-related namespaces. Excludes the Watchdog heartbeat alert."
         plugin:
-          kind: TimeSeriesTable
-          spec: {}
+          kind: Table
+          spec:
+            density: "compact"
+            transforms:
+              - kind: "MergeSeries"
+                spec: {}
+            columnSettings:
+              - name: "timestamp"
+                hide: true
+              - name: "alertname"
+                header: "Alert"
+                align: "left"
+                enableSorting: true
+              - name: "severity"
+                header: "Severity"
+                align: "left"
+                enableSorting: true
+              - name: "namespace"
+                header: "Namespace"
+                align: "left"
+              - name: "value"
+                header: "Active"
+                align: "right"
         queries:
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{alertname}} ({{severity}})"
-                  query: ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"$llm_namespace|$kuadrant_namespace|$maas_namespace|envoy-gateway-system"}
+                  query: ALERTS{alertstate="firing", alertname!="Watchdog", namespace=~"$llm_namespace|$kuadrant_namespace|$maas_namespace|$gateway_namespace"}
 
     # =============================================
     # Section: Auth Evaluation (2 panels)
@@ -223,21 +243,21 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "P50"
-                  query: histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=""}[5m])) by (le))
+                  query: histogram_quantile(0.5, sum(rate(auth_server_authconfig_duration_seconds_bucket{namespace=~"$kuadrant_namespace", authconfig!=""}[5m])) by (le))
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "P95"
-                  query: histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=""}[5m])) by (le))
+                  query: histogram_quantile(0.95, sum(rate(auth_server_authconfig_duration_seconds_bucket{namespace=~"$kuadrant_namespace", authconfig!=""}[5m])) by (le))
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "P99"
-                  query: histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket{authconfig!=""}[5m])) by (le))
+                  query: histogram_quantile(0.99, sum(rate(auth_server_authconfig_duration_seconds_bucket{namespace=~"$kuadrant_namespace", authconfig!=""}[5m])) by (le))
 
     authSuccessDenyRate:
       kind: Panel
@@ -261,7 +281,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{status}}"
-                  query: sum by (status) (rate(auth_server_authconfig_response_status{authconfig!=""}[5m]))
+                  query: sum by (status) (rate(auth_server_authconfig_response_status{namespace=~"$kuadrant_namespace", authconfig!=""}[5m]))
 
     # =============================================
     # Section: Key Metrics (8 panels)
@@ -286,7 +306,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Tokens"
-                  query: sum(authorized_hits)
+                  query: sum(authorized_hits{namespace=~"$kuadrant_namespace"})
 
     totalRequests:
       kind: Panel
@@ -308,7 +328,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Requests"
-                  query: sum(authorized_calls)
+                  query: sum(authorized_calls{namespace=~"$kuadrant_namespace"})
 
     tokenRate:
       kind: Panel
@@ -330,7 +350,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "tokens/s"
-                  query: sum(rate(authorized_hits[5m]))
+                  query: sum(rate(authorized_hits{namespace=~"$kuadrant_namespace"}[5m]))
 
     requestRate:
       kind: Panel
@@ -352,7 +372,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "req/s"
-                  query: sum(rate(authorized_calls[5m]))
+                  query: sum(rate(authorized_calls{namespace=~"$kuadrant_namespace"}[5m]))
 
     inferenceSuccessRate:
       kind: Panel
@@ -375,7 +395,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Success Rate"
-                  query: ((sum(rate(vllm:request_success_total[5m])) / sum(rate(vllm:e2e_request_latency_seconds_count[5m]))) >= 0) OR vector(1)
+                  query: ((sum(rate(vllm:request_success_total{namespace=~"$llm_namespace"}[5m])) / clamp_min(sum(rate(vllm:e2e_request_latency_seconds_count{namespace=~"$llm_namespace"}[5m])), 1e-9)) * (sum(rate(vllm:e2e_request_latency_seconds_count{namespace=~"$llm_namespace"}[5m])) > 0)) OR vector(0)
 
     activeUsers:
       kind: Panel
@@ -396,7 +416,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Users"
-                  query: count(count by (user) (authorized_calls))
+                  query: count(count by (user) (authorized_calls{namespace=~"$kuadrant_namespace", user!=""}))
 
     p50Latency:
       kind: Panel
@@ -418,7 +438,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "P50"
-                  query: (histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket[15m])) by (le)) >= 0) OR vector(0)
+                  query: (histogram_quantile(0.5, sum(rate(istio_request_duration_milliseconds_bucket{namespace=~"$gateway_namespace"}[15m])) by (le)) >= 0) OR vector(0)
 
     rateLimitRatio:
       kind: Panel
@@ -440,7 +460,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Rate Limited"
-                  query: (sum(limited_calls) / (sum(authorized_calls) + sum(limited_calls))) OR vector(0)
+                  query: (sum(limited_calls{namespace=~"$kuadrant_namespace"}) / (sum(authorized_calls{namespace=~"$kuadrant_namespace"}) + sum(limited_calls{namespace=~"$kuadrant_namespace"}))) OR vector(0)
 
     # =============================================
     # Section: Traffic Analysis (6 panels)
@@ -467,7 +487,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{model}}"
-                  query: sum by (model) (rate(authorized_hits{model!=""}[5m]))
+                  query: sum by (model) (rate(authorized_hits{namespace=~"$kuadrant_namespace", model!=""}[5m]))
 
     overallErrorRate:
       kind: Panel
@@ -491,21 +511,21 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "4xx Errors (excl. 429)"
-                  query: sum(rate(istio_requests_total{response_code=~"4..", response_code!="429"}[5m])) OR vector(0)
+                  query: sum(rate(istio_requests_total{namespace=~"$gateway_namespace", response_code=~"4..", response_code!="429"}[5m])) OR vector(0)
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "5xx Errors"
-                  query: sum(rate(istio_requests_total{response_code=~"5.."}[5m])) OR vector(0)
+                  query: sum(rate(istio_requests_total{namespace=~"$gateway_namespace", response_code=~"5.."}[5m])) OR vector(0)
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "429 Rate Limited"
-                  query: sum(rate(limited_calls[5m])) OR vector(0)
+                  query: sum(rate(limited_calls{namespace=~"$kuadrant_namespace"}[5m])) OR vector(0)
 
     tokenConsumptionBySubscription:
       kind: Panel
@@ -529,7 +549,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{subscription}}"
-                  query: sum by (subscription) (rate(authorized_hits{subscription!=""}[5m]))
+                  query: sum by (subscription) (rate(authorized_hits{namespace=~"$kuadrant_namespace", subscription!=""}[5m]))
 
     requestVolumeBySubscription:
       kind: Panel
@@ -553,7 +573,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{subscription}}"
-                  query: sum by (subscription) (rate(authorized_calls{subscription!=""}[5m]))
+                  query: sum by (subscription) (rate(authorized_calls{namespace=~"$kuadrant_namespace", subscription!=""}[5m]))
 
     p95LatencyByService:
       kind: Panel
@@ -577,7 +597,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{destination_service_name}}"
-                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{destination_service_name!="unknown"}[5m])))
+                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{namespace=~"$gateway_namespace", destination_service_name!="unknown"}[5m])))
 
     rateLimitViolationsBySubscription:
       kind: Panel
@@ -601,7 +621,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{subscription}}"
-                  query: sum by (subscription) (rate(limited_calls{subscription!=""}[5m]))
+                  query: sum by (subscription) (rate(limited_calls{namespace=~"$kuadrant_namespace", subscription!=""}[5m]))
 
     # =============================================
     # Section: Error Breakdown (2 panels)
@@ -628,7 +648,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Rate Limited"
-                  query: sum(rate(limited_calls[5m]))
+                  query: sum(rate(limited_calls{namespace=~"$kuadrant_namespace"}[5m])) OR vector(0)
 
     unauthorizedRequests:
       kind: Panel
@@ -652,7 +672,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Unauthorized (401)"
-                  query: sum(rate(istio_requests_total{response_code="401"}[5m])) OR vector(0)
+                  query: sum(rate(istio_requests_total{namespace=~"$gateway_namespace", response_code="401"}[5m])) OR vector(0)
 
     # =============================================
     # Section: Model Metrics (12 panels)
@@ -676,7 +696,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Running"
-                  query: sum(vllm:num_requests_running)
+                  query: sum(vllm:num_requests_running{namespace=~"$llm_namespace"})
 
     requestsWaiting:
       kind: Panel
@@ -697,7 +717,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Waiting"
-                  query: sum(vllm:num_requests_waiting)
+                  query: sum(vllm:num_requests_waiting{namespace=~"$llm_namespace"})
 
     gpuCacheUsage:
       kind: Panel
@@ -720,7 +740,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "Cache Usage"
-                  query: avg(vllm:kv_cache_usage_perc)
+                  query: avg(vllm:kv_cache_usage_perc{namespace=~"$llm_namespace"})
 
     totalModelRequests:
       kind: Panel
@@ -1029,7 +1049,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{user}}"
-                  query: topk(10, sum by (user) (authorized_hits{user!=""}))
+                  query: topk(10, sum by (user) (authorized_hits{namespace=~"$kuadrant_namespace", user!=""}))
 
     topUsersByDeclined:
       kind: Panel
@@ -1053,7 +1073,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{user}}"
-                  query: topk(10, sum by (user) (limited_calls{user!=""}))
+                  query: topk(10, sum by (user) (limited_calls{namespace=~"$kuadrant_namespace", user!=""}))
 
     # =============================================
     # Section: Detailed Breakdown (2 panels)
@@ -1080,25 +1100,46 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{user}}"
-                  query: sum by (user) (rate(authorized_hits[5m]))
+                  query: sum by (user) (rate(authorized_hits{namespace=~"$kuadrant_namespace"}[5m]))
 
     requestVolumeByUserSubscription:
       kind: Panel
       spec:
         display:
           name: "📋 Request Volume by User & Subscription"
-          description: "Request count by user and subscription. Note: OpenShift Console shows raw labels; native Perses applies the formatted series name."
+          description: "Request count by user and subscription."
         plugin:
-          kind: TimeSeriesTable
-          spec: {}
+          kind: Table
+          spec:
+            density: "compact"
+            transforms:
+              - kind: "MergeSeries"
+                spec: {}
+            columnSettings:
+              - name: "timestamp"
+                hide: true
+              - name: "user"
+                header: "User"
+                align: "left"
+                enableSorting: true
+              - name: "subscription"
+                header: "Subscription"
+                align: "left"
+                enableSorting: true
+              - name: "value"
+                header: "Requests"
+                align: "right"
+                enableSorting: true
+                sort: "desc"
+                format:
+                  unit: decimal
         queries:
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{user}} / {{subscription}}"
-                  query: sum by (user, subscription) (authorized_calls{user!=""})
+                  query: sum by (user, subscription) (authorized_calls{namespace=~"$kuadrant_namespace", user!=""})
 
     # =============================================
     # Section: Resource Allocation (1 panel)
@@ -1108,46 +1149,80 @@ spec:
       spec:
         display:
           name: "📦 Resource Allocation per Model"
-          description: "Resource requests/limits for LLM model pods. Note: OpenShift Console shows raw labels; native Perses applies the formatted series name."
+          description: "Resource requests/limits for LLM model pods."
         plugin:
-          kind: TimeSeriesTable
-          spec: {}
+          kind: Table
+          spec:
+            density: "compact"
+            transforms:
+              - kind: "MergeSeries"
+                spec: {}
+            columnSettings:
+              - name: "timestamp"
+                hide: true
+              - name: "pod"
+                header: "Pod"
+                align: "left"
+                enableSorting: true
+              - name: "value #1"
+                header: "CPU Req"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+              - name: "value #2"
+                header: "CPU Lim"
+                align: "right"
+                format:
+                  unit: decimal
+              - name: "value #3"
+                header: "Mem Req"
+                align: "right"
+                format:
+                  unit: bytes
+                  shortValues: true
+              - name: "value #4"
+                header: "Mem Lim"
+                align: "right"
+                format:
+                  unit: bytes
+                  shortValues: true
+              - name: "value #5"
+                header: "GPUs"
+                align: "right"
+                format:
+                  unit: decimal
         queries:
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{pod}} - CPU requests"
-                  query: max by (pod) (kube_pod_container_resource_requests{namespace=~"$llm_namespace", resource="cpu"})
+                  query: sum by (pod) (kube_pod_container_resource_requests{namespace=~"$llm_namespace", resource="cpu"})
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{pod}} - CPU limits"
-                  query: max by (pod) (kube_pod_container_resource_limits{namespace=~"$llm_namespace", resource="cpu"})
+                  query: sum by (pod) (kube_pod_container_resource_limits{namespace=~"$llm_namespace", resource="cpu"})
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{pod}} - Memory requests"
-                  query: max by (pod) (kube_pod_container_resource_requests{namespace=~"$llm_namespace", resource="memory"})
+                  query: sum by (pod) (kube_pod_container_resource_requests{namespace=~"$llm_namespace", resource="memory"})
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{pod}} - Memory limits"
-                  query: max by (pod) (kube_pod_container_resource_limits{namespace=~"$llm_namespace", resource="memory"})
+                  query: sum by (pod) (kube_pod_container_resource_limits{namespace=~"$llm_namespace", resource="memory"})
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
-                  seriesNameFormat: "{{pod}} - GPUs"
-                  query: max by (pod) (kube_pod_container_resource_requests{namespace=~"$llm_namespace", resource=~"nvidia.com/gpu|amd.com/gpu"})
+                  query: sum by (pod) (kube_pod_container_resource_requests{namespace=~"$llm_namespace", resource=~"nvidia.com/gpu|amd.com/gpu"})
 
     # =============================================
     # Section: User Tracking (1 panel)
@@ -1174,14 +1249,14 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{user}} (tokens/s)"
-                  query: sum by (user) (rate(authorized_hits[5m]))
+                  query: sum by (user) (rate(authorized_hits{namespace=~"$kuadrant_namespace"}[5m]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{user}} (429 Rate Limited)"
-                  query: sum by (user) (rate(limited_calls[5m]))
+                  query: sum by (user) (rate(limited_calls{namespace=~"$kuadrant_namespace"}[5m]))
 
     # =============================================
     # Section: Per-Subscription & Per-Model Breakdown (3 panels)
@@ -1208,7 +1283,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{destination_service_name}}"
-                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{destination_service_name!="",destination_service_name!="unknown"}[5m])))
+                  query: histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{namespace=~"$gateway_namespace", destination_service_name!="",destination_service_name!="unknown"}[5m])))
 
     tokenVolumeBySubscription:
       kind: Panel
@@ -1235,7 +1310,7 @@ spec:
                 kind: PrometheusTimeSeriesQuery
                 spec:
                   seriesNameFormat: "{{subscription}}"
-                  query: sum by (subscription) (increase(authorized_hits{subscription!=""}[5m]))
+                  query: sum by (subscription) (increase(authorized_hits{namespace=~"$kuadrant_namespace", subscription!=""}[5m]))
 
   # Layout definition
   layouts:
