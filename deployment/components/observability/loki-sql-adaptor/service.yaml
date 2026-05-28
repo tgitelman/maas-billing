@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki-sql-adaptor
+  labels:
+    app: loki-sql-adaptor
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  selector:
+    app: loki-sql-adaptor
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP

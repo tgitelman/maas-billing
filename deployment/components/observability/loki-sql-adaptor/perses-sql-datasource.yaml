@@ -1,0 +1,26 @@
+# Perses Datasource pointing at the SQL Adaptor (Loki-compatible API)
+# Replace the URL with the actual in-cluster service address.
+# Existing dashboard-usage.yaml queries work unchanged against this endpoint.
+apiVersion: perses.dev/v1alpha2
+kind: PersesDatasource
+metadata:
+  name: loki-sql
+  labels:
+    app: perses
+    app.kubernetes.io/part-of: maas-observability
+spec:
+  config:
+    display:
+      name: "Loki (SQL-backed)"
+      description: "Usage data from MySQL via Loki-compatible API adaptor"
+    default: false
+    plugin:
+      kind: "LokiDatasource"
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://loki-sql-adaptor.openshift-operators.svc:8080
+            allowedEndpoints:
+              - endpointPattern: /loki/api/v1/.*
+                method: GET

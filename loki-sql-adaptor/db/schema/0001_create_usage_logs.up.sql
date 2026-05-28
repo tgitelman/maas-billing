@@ -1,0 +1,26 @@
+CREATE TABLE IF NOT EXISTS usage_logs (
+    id                       BIGINT AUTO_INCREMENT PRIMARY KEY,
+    timestamp                DATETIME(3)  NOT NULL,
+    user_id                  VARCHAR(255) NOT NULL DEFAULT '',
+    subscription             VARCHAR(255) NOT NULL DEFAULT '',
+    model                    VARCHAR(255) NOT NULL DEFAULT '',
+    tokens_total             INT          NOT NULL DEFAULT 0,
+    tokens_prompt            INT          NOT NULL DEFAULT 0,
+    tokens_completion        INT          NOT NULL DEFAULT 0,
+    response_code            SMALLINT     NOT NULL DEFAULT 0,
+    method                   VARCHAR(10)  NOT NULL DEFAULT '',
+    path                     VARCHAR(512) NOT NULL DEFAULT '',
+    duration_ms              INT          NOT NULL DEFAULT 0,
+    request_id               VARCHAR(64)  NOT NULL DEFAULT '',
+    authority                VARCHAR(255) NOT NULL DEFAULT '',
+    route_name               VARCHAR(255) NOT NULL DEFAULT '',
+    downstream_remote_address VARCHAR(64) NOT NULL DEFAULT '',
+    upstream_cluster         VARCHAR(255) NOT NULL DEFAULT '',
+    bytes_received           INT          NOT NULL DEFAULT 0,
+    bytes_sent               INT          NOT NULL DEFAULT 0,
+    response_code_details    VARCHAR(255) NOT NULL DEFAULT '',
+
+    INDEX idx_ts_sub_model (timestamp, subscription, model),
+    INDEX idx_user_ts (user_id, timestamp),
+    INDEX idx_sub_model_user (subscription, model, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

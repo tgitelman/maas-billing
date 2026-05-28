@@ -1,0 +1,6 @@
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+WORKDIR /
+COPY bin/loki-sql-adaptor /loki-sql-adaptor
+COPY bin/seeddata /seeddata
+USER 65532:65532
+ENTRYPOINT ["/loki-sql-adaptor"]
