@@ -5,7 +5,8 @@ metadata:
   labels:
     app: loki-query-proxy
     mode: user
-    app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-observability
+    app.kubernetes.io/component: loki-proxy
 spec:
   type: ClusterIP
   ports:
