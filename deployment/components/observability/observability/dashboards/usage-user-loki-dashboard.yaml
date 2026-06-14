@@ -1,19 +1,13 @@
-# Perses Dashboard: Usage User Dashboard
-# User-scoped view — queries go through the loki-query-proxy which injects
-# a user_id filter based on the logged-in user's Kubernetes token.
-# The proxy uses TokenReview to resolve the caller's identity automatically.
-#
-# Same panels and layout as usage-admin-dashboard.yaml but every query targets
-# the scoped-loki datasource instead of the direct loki datasource.
+# User-scoped usage dashboard — queries go through loki-query-proxy which
+# injects user_id filtering based on the logged-in user's Kubernetes token.
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
 metadata:
-  name: usage-user-scoped-dashboard
+  name: usage-user-loki-dashboard
+  namespace: opendatahub
   labels:
-    app: perses
-    app.kubernetes.io/part-of: maas-observability
-  annotations:
-    maas.observability/visual-revision: "2026-06-10-user-scoped"
+    app.kubernetes.io/managed-by: maas-observability
+    app.kubernetes.io/component: perses
 spec:
   display:
     name: "Usage User Dashboard"

@@ -17,18 +17,14 @@ resources:
   # Prometheus datasource (Thanos Querier)
   - perses-thanos-ca.yaml
   - perses-datasource.yaml
-  # Loki RBAC (SA + ClusterRoleBinding for reading logs)
-  - perses-loki-ca.yaml
-  - perses-loki-rbac.yaml
-  # Admin dashboards
+  - perses-datasource-scoped.yaml
+  - perses-rbac-scoped.yaml
+  # Prometheus dashboards
   - dashboards/dashboard-ai-engineer.yaml
   - dashboards/dashboard-platform-admin.yaml
-  - dashboards/usage-admin-dashboard.yaml
-  - dashboards/usage-user-scoped-dashboard.yaml
 
 labels:
   - pairs:
       app.kubernetes.io/managed-by: maas-observability
       app.kubernetes.io/component: perses
     includeSelectors: false
-
