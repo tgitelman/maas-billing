@@ -1,14 +1,13 @@
-# Admin LokiDatasource — direct to LokiStack, no user filtering.
-# NAMING: The scoped datasource is "scoped-loki" (NOT "loki-scoped") because
-# the monitoring-console-plugin uses prefix matching on datasource names.
+# Admin Loki datasource — direct to LokiStack, no user filtering.
 ---
 apiVersion: perses.dev/v1alpha1
 kind: PersesDatasource
 metadata:
   name: loki
+  namespace: opendatahub
   labels:
-    app: perses
-    app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-observability
+    app.kubernetes.io/component: perses
 spec:
   config:
     display:
