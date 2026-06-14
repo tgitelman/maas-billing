@@ -8,7 +8,6 @@ metadata:
 
 resources:
   - loki-ca.yaml
-  - loki-datasource.yaml
   - loki-rbac.yaml
   - loki-secret.yaml
   - loki-datasource-scoped.yaml

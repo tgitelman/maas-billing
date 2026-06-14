@@ -33,13 +33,46 @@ data:
         "time"
     )
 
+    const saTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
     var (
-        cfg             *proxyConfig
-        lokiUpstream    *url.URL
-        httpClient      *http.Client
+        cfg               *proxyConfig
+        lokiUpstream      *url.URL
+        httpClient        *http.Client
         tokenReviewClient *http.Client
-        saTokenPath     = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        tokenReviewURL    string
     )
+
+    var adminGroups = map[string]bool{
+        "system:cluster-admins": true,
+        "system:masters":        true,
+    }
+
+    var allowedPaths = map[string]bool{
+        "/loki/api/v1/query":              true,
+        "/loki/api/v1/query_range":        true,
+        "/loki/api/v1/tail":               true,
+        "/loki/api/v1/index/stats":        true,
+        "/loki/api/v1/index/volume":       true,
+        "/loki/api/v1/index/volume_range": true,
+        "/loki/api/v1/labels":             true,
+        "/loki/api/v1/series":             true,
+        "/health":                         true,
+        "/ready":                          true,
+    }
+
+    var hopByHopHeaders = map[string]bool{
+        "Connection":          true,
+        "Keep-Alive":          true,
+        "Proxy-Authenticate":  true,
+        "Proxy-Authorization": true,
+        "Te":                  true,
+        "Trailers":            true,
+        "Transfer-Encoding":   true,
+        "Upgrade":             true,
+        "Authorization":       true,
+        "Content-Length":       true,
+    }
 
     func main() {
         var err error
@@ -84,6 +117,14 @@ data:
             }},
         }
 
+        apiHost := os.Getenv("KUBERNETES_SERVICE_HOST")
+        apiPort := os.Getenv("KUBERNETES_SERVICE_PORT")
+        if apiPort == "" {
+            apiPort = "443"
+        }
+        tokenReviewURL = fmt.Sprintf("https://%s:%s/apis/authentication.k8s.io/v1/tokenreviews", apiHost, apiPort)
+        log.Printf("TokenReview endpoint: %s", tokenReviewURL)
+
         http.HandleFunc("/health", healthHandler)
         http.HandleFunc("/ready", healthHandler)
         http.HandleFunc("/", proxyHandler)
@@ -110,11 +151,6 @@ data:
         })
     }
 
-    var adminGroups = map[string]bool{
-        "system:cluster-admins": true,
-        "system:masters":        true,
-    }
-
     func isAdmin(groups []string) bool {
         for _, g := range groups {
             if adminGroups[g] {
@@ -124,15 +160,14 @@ data:
         return false
     }
 
-    var allowedPaths = map[string]bool{
-        "/loki/api/v1/query":       true,
-        "/loki/api/v1/query_range": true,
-        "/loki/api/v1/tail":        true,
-        "/loki/api/v1/index/stats": true,
-        "/loki/api/v1/index/volume": true,
-        "/loki/api/v1/index/volume_range": true,
-        "/health": true,
-        "/ready":  true,
+    func isAllowedPath(path string) bool {
+        if allowedPaths[path] {
+            return true
+        }
+        if strings.HasPrefix(path, "/loki/api/v1/label/") && strings.HasSuffix(path, "/values") {
+            return true
+        }
+        return false
     }
 
     func proxyHandler(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +187,7 @@ data:
             } else {
                 username = userInfo.Username
                 log.Printf("User mode: filtering by user_id=%s", username)
-                if !allowedPaths[r.URL.Path] {
+                if !isAllowedPath(r.URL.Path) {
                     log.Printf("Blocked non-admin access to %s for user=%s", r.URL.Path, username)
                     jsonError(w, "Forbidden: endpoint not available for non-admin users", http.StatusForbidden)
                     return
@@ -187,14 +222,8 @@ data:
             return
         }
 
-        hopByHop := map[string]bool{
-            "Connection": true, "Keep-Alive": true, "Proxy-Authenticate": true,
-            "Proxy-Authorization": true, "Te": true, "Trailers": true,
-            "Transfer-Encoding": true, "Upgrade": true,
-            "Authorization": true, "Content-Length": true,
-        }
         for key, values := range r.Header {
-            if hopByHop[key] {
+            if hopByHopHeaders[key] {
                 continue
             }
             for _, value := range values {
@@ -303,14 +332,7 @@ data:
             return nil, fmt.Errorf("failed to marshal TokenReview request: %w", err)
         }
 
-        apiHost := os.Getenv("KUBERNETES_SERVICE_HOST")
-        apiPort := os.Getenv("KUBERNETES_SERVICE_PORT")
-        if apiPort == "" {
-            apiPort = "443"
-        }
-        apiURL := fmt.Sprintf("https://%s:%s/apis/authentication.k8s.io/v1/tokenreviews", apiHost, apiPort)
-
-        req, err := http.NewRequest("POST", apiURL, bytes.NewReader(body))
+        req, err := http.NewRequest("POST", tokenReviewURL, bytes.NewReader(body))
         if err != nil {
             return nil, fmt.Errorf("failed to build TokenReview request: %w", err)
         }
@@ -389,6 +411,7 @@ data:
         }
         filter := fmt.Sprintf(` | user_id="%s"`, escapeLogQLValue(username))
         var result strings.Builder
+        result.Grow(len(query) + len(filter)*2)
         inSelector := false
         inDoubleQuote := false
         inBacktick := false

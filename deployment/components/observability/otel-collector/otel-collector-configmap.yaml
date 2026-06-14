@@ -22,6 +22,9 @@ data:
     processors:
       resource:
         attributes:
+        - key: log_type
+          value: application
+          action: insert
         - key: service.name
           value: maas-gateway
           action: upsert
@@ -46,6 +49,9 @@ data:
         - model
         - response_code
         - method
+        - user_id
+        - key_id
+        - organization_id
       batch:
         timeout: 5s
         # Large batches + slow gateway → exporter timeouts and "Dropping data" (synthetic bursts hit this first).

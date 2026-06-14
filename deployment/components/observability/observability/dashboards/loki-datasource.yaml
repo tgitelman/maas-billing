@@ -19,7 +19,8 @@ spec:
         proxy:
           kind: HTTPProxy
           spec:
-            url: https://lokistack-sample-gateway-http.logging4.svc.cluster.local:8080/api/logs/v1/application
+            # LokiStack gateway URL — adjust name/namespace to match your LokiStack CR.
+            url: https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/application
             allowedEndpoints:
               - endpointPattern: "/loki/api/v1/.*"
                 method: GET

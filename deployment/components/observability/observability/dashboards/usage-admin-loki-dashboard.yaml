@@ -1,6 +1,6 @@
 # Admin usage dashboard — queries Loki structured logs via LogQL.
 # Uses $__range to bind LogQL windows to the native time picker.
-# StaticListVariable for model/subscription dropdowns (no LokiLabelValuesVariable yet).
+# LokiLabelValuesVariable for model/subscription dropdowns (COO 1.5+).
 # user_id!="-" filters out health-check / probe traffic.
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
@@ -20,12 +20,23 @@ spec:
   duration: 1h
 
   variables:
-    - kind: TextVariable
+    - kind: ListVariable
       spec:
         name: user
         display:
-          name: "User ID"
-        value: ".+"
+          name: "User"
+        allowMultiple: true
+        allowAllValue: true
+        defaultValue: "$__all"
+        plugin:
+          kind: LokiLabelValuesVariable
+          spec:
+            datasource:
+              kind: LokiDatasource
+              name: loki
+            labelName: user_id
+            matchers:
+              - '{service_name="maas-gateway", user_id!="-"}'
     - kind: ListVariable
       spec:
         name: subscription
@@ -35,14 +46,14 @@ spec:
         allowAllValue: true
         defaultValue: "$__all"
         plugin:
-          kind: StaticListVariable
+          kind: LokiLabelValuesVariable
           spec:
-            values:
-              - "dev-subscription-a"
-              - "dev-subscription-b"
-              - "facebook-opt-125m-subscription"
-              - "simulator-subscription"
-              - "standard-subscription"
+            datasource:
+              kind: LokiDatasource
+              name: loki
+            labelName: subscription
+            matchers:
+              - '{service_name="maas-gateway", subscription!="-"}'
     - kind: ListVariable
       spec:
         name: model
@@ -52,14 +63,14 @@ spec:
         allowAllValue: true
         defaultValue: "$__all"
         plugin:
-          kind: StaticListVariable
+          kind: LokiLabelValuesVariable
           spec:
-            values:
-              - "facebook/opt-125m"
-              - "meta-llama/Llama-3.2-1B-Instruct"
-              - "test-model"
-              - "test/e2e-distinct-model-2"
-              - "the-best-gpt-3.5-m"
+            datasource:
+              kind: LokiDatasource
+              name: loki
+            labelName: model
+            matchers:
+              - '{service_name="maas-gateway", model!="-"}'
     - kind: ListVariable
       spec:
         name: view_by
@@ -312,6 +323,13 @@ spec:
                 format:
                   unit: decimal
                   decimalPlaces: 0
+              - name: "value #3"
+                header: "Rate Limited"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+                  decimalPlaces: 0
         queries:
           - kind: TimeSeriesQuery
             spec:
@@ -340,6 +358,20 @@ spec:
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
                     | response_code=~"2.." | user_id=~"$user" | user_id!="-" [$__range]))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: loki
+                  query: >-
+                    sum by (model, subscription) (count_over_time(
+                    {service_name="maas-gateway",
+                    subscription=~"$subscription", response_code="429"}
+                    | user_id=~"$user" | user_id!="-"
+                    | label_format model="N/A (rate limited)" [$__range]))
 
   layouts:
     - kind: Grid

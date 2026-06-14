@@ -27,23 +27,23 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: loki-query-proxy-namespace-view
+  name: loki-query-proxy-tokenreview
   labels:
     app: loki-query-proxy
     app.kubernetes.io/managed-by: maas-observability
     app.kubernetes.io/component: loki-proxy
 rules:
-- apiGroups: [""]
-  resources: ["namespaces"]
-  verbs: ["list", "get"]
 - apiGroups: ["authentication.k8s.io"]
   resources: ["tokenreviews"]
   verbs: ["create"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: loki-query-proxy-namespace-view
+  name: loki-query-proxy-tokenreview
   labels:
     app: loki-query-proxy
     app.kubernetes.io/managed-by: maas-observability
@@ -51,7 +51,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: loki-query-proxy-namespace-view
+  name: loki-query-proxy-tokenreview
 subjects:
 - kind: ServiceAccount
   name: loki-query-proxy
