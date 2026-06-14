@@ -138,16 +138,84 @@ spec:
                 grpc_service:
                   envoy_grpc:
                     cluster_name: otel_als_cluster
+              resource_attributes:
+                values:
+                - key: service.name
+                  value:
+                    string_value: "maas-gateway"
+                - key: service.namespace
+                  value:
+                    string_value: "openshift-ingress"
+                - key: log_type
+                  value:
+                    string_value: "access-log"
               body:
-                string_value: "%RESPONSE_CODE% %REQ(:METHOD)% %REQ(:PATH)%"
+                string_value: "%REQ(:METHOD)% %REQ(:PATH)% %RESPONSE_CODE%"
               attributes:
                 values:
+                - key: request_id
+                  value:
+                    string_value: "%REQ(X-REQUEST-ID)%"
+                - key: method
+                  value:
+                    string_value: "%REQ(:METHOD)%"
+                - key: path
+                  value:
+                    string_value: "%REQ(:PATH)%"
+                - key: authority
+                  value:
+                    string_value: "%REQ(:AUTHORITY)%"
+                - key: response_code
+                  value:
+                    string_value: "%RESPONSE_CODE%"
+                - key: upstream_cluster
+                  value:
+                    string_value: "%UPSTREAM_CLUSTER%"
+                - key: duration_ms
+                  value:
+                    string_value: "%DURATION%"
+                - key: bytes_received
+                  value:
+                    string_value: "%BYTES_RECEIVED%"
+                - key: bytes_sent
+                  value:
+                    string_value: "%BYTES_SENT%"
+                - key: response_code_details
+                  value:
+                    string_value: "%RESPONSE_CODE_DETAILS%"
+                - key: downstream_remote_address
+                  value:
+                    string_value: "%DOWNSTREAM_REMOTE_ADDRESS%"
+                - key: route_name
+                  value:
+                    string_value: "%ROUTE_NAME%"
                 - key: user_id
                   value:
                     string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%"
                 - key: subscription
                   value:
                     string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.selected_subscription:PLAIN)%"
+                - key: subscription_labels
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.subscription_labels:PLAIN)%"
+                - key: organization_id
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%"
+                - key: groups
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.groups_str:PLAIN)%"
+                - key: cost_center
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.costCenter:PLAIN)%"
+                - key: key_id
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%"
+                - key: auth_error
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.subscription_error:PLAIN)%"
+                - key: auth_error_msg
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.subscription_error_message:PLAIN)%"
                 - key: tokens_total
                   value:
                     string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_total)%"
@@ -160,39 +228,3 @@ spec:
                 - key: model
                   value:
                     string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%"
-                - key: response_code
-                  value:
-                    string_value: "%RESPONSE_CODE%"
-                - key: method
-                  value:
-                    string_value: "%REQ(:METHOD)%"
-                - key: path
-                  value:
-                    string_value: "%REQ(:PATH)%"
-                - key: duration_ms
-                  value:
-                    string_value: "%DURATION%"
-                - key: request_id
-                  value:
-                    string_value: "%REQ(X-REQUEST-ID)%"
-                - key: authority
-                  value:
-                    string_value: "%REQ(:AUTHORITY)%"
-                - key: route_name
-                  value:
-                    string_value: "%ROUTE_NAME%"
-                - key: downstream_remote_address
-                  value:
-                    string_value: "%DOWNSTREAM_REMOTE_ADDRESS%"
-                - key: upstream_cluster
-                  value:
-                    string_value: "%UPSTREAM_CLUSTER%"
-                - key: bytes_received
-                  value:
-                    string_value: "%BYTES_RECEIVED%"
-                - key: bytes_sent
-                  value:
-                    string_value: "%BYTES_SENT%"
-                - key: response_code_details
-                  value:
-                    string_value: "%RESPONSE_CODE_DETAILS%"
