@@ -43,7 +43,7 @@ spec:
           value: "user"
         # Override via kustomize patch for your LokiStack service name/namespace.
         - name: LOKI_UPSTREAM_URL
-          value: "https://logging-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application"
+          value: "https://__LOKI_GATEWAY_SVC__.openshift-logging.svc:8080/api/logs/v1/application"
         - name: HOME
           value: "/tmp"
         - name: GOPATH
