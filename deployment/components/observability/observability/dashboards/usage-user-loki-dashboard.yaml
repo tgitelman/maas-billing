@@ -1,5 +1,6 @@
 # User-scoped usage dashboard — queries go through loki-query-proxy which
 # injects user_id filtering based on the logged-in user's Kubernetes token.
+# CEL filter restricts logs to inference-only paths; no probe traffic to filter.
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
 metadata:
@@ -95,8 +96,7 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum(sum_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model"}
-                    | user_id!="-"
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | unwrap tokens_total [$__range]))
                     or vector(0)
 
@@ -104,8 +104,8 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "Total Requests"
-          description: "Total API requests (authorized + rate-limited) over the selected time window."
+          name: "Total Successful Requests"
+          description: "Total successful (2xx) requests over the selected time window."
         plugin:
           kind: StatChart
           spec:
@@ -125,15 +125,15 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription"}
-                    | user_id!="-" [$__range]))
+                    subscription=~"$subscription", response_type="hit"}
+                    [$__range]))
                     or vector(0)
 
     totalRateLimited:
       kind: Panel
       spec:
         display:
-          name: "Total Rate Limited"
+          name: "Total Rate Limited Requests"
           description: "Total rate-limited requests over the selected time window."
         plugin:
           kind: StatChart
@@ -154,8 +154,8 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription"}
-                    | response_code="429" | user_id!="-" [$__range]))
+                    subscription=~"$subscription", response_type="rate_limit"}
+                    [$__range]))
                     or vector(0)
 
     successRate:
@@ -182,12 +182,12 @@ spec:
                     name: scoped-loki
                   query: >-
                     (sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription"}
-                    | response_code=~"2.." | user_id!="-" [$__range]))
+                    subscription=~"$subscription", response_type="hit"}
+                    [$__range]))
                     /
                     sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | user_id!="-" [$__range])))
+                    [$__range])))
                     or vector(1)
 
     tokenConsumptionOverTime:
@@ -227,8 +227,7 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum by (${view_by:raw}) (sum_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model"}
-                    | user_id!="-"
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | unwrap tokens_total [30m]))
 
     tokenConsumptionTable:
@@ -266,14 +265,14 @@ spec:
                   unit: decimal
                   shortValues: true
               - name: "value #2"
-                header: "Requests"
+                header: "Successful Requests"
                 align: "right"
                 enableSorting: true
                 format:
                   unit: decimal
                   decimalPlaces: 0
               - name: "value #3"
-                header: "Rate Limited"
+                header: "Rate Limited Requests"
                 align: "right"
                 enableSorting: true
                 format:
@@ -291,9 +290,8 @@ spec:
                   query: >-
                     sum by (model, subscription) (sum_over_time(
                     {service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model"}
-                    | user_id!="-"
-                    | unwrap tokens_total [$__range]))
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    | unwrap tokens_total [$__range] offset -$__range))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -305,8 +303,8 @@ spec:
                   query: >-
                     sum by (model, subscription) (count_over_time(
                     {service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model"}
-                    | response_code=~"2.." | user_id!="-" [$__range]))
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    [$__range] offset -$__range))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -318,9 +316,13 @@ spec:
                   query: >-
                     sum by (model, subscription) (count_over_time(
                     {service_name="maas-gateway",
-                    subscription=~"$subscription", response_code="429"}
-                    | user_id!="-"
-                    | label_format model="N/A (rate limited)" [$__range]))
+                    subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
+                    [$__range] offset -$__range))
+                    or
+                    (sum by (model, subscription) (count_over_time(
+                    {service_name="maas-gateway",
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    [$__range] offset -$__range)) * 0)
 
   layouts:
     - kind: Grid

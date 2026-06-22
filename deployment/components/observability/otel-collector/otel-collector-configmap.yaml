@@ -43,11 +43,14 @@ data:
           statements:
           - replace_pattern(attributes["user_id"], "^\"(.*)\"$", "$$1")
           - replace_pattern(attributes["subscription"], "^\"(.*)\"$", "$$1")
+          - replace_pattern(attributes["key_id"], "^\"(.*)\"$", "$$1")
+          - replace_pattern(attributes["groups"], "^\"(.*)\"$", "$$1")
+          - replace_pattern(attributes["organization_id"], "^\"(.*)\"$", "$$1")
       groupbyattrs:
         keys:
         - subscription
         - model
-        - response_code
+        - response_type
         - method
         - user_id
         - key_id
