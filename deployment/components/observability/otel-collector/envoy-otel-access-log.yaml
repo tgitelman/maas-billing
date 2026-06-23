@@ -4,17 +4,30 @@
 #
 # Identity:  FILTER_STATE(wasm.kuadrant.auth.identity.*) — set by Kuadrant Wasm
 #            plugin before rate limiting, so available on both 2xx and 429.
-# Model:     Lua parses "model" from request body (covers 429), then overwrites
-#            from response body on 200 (authoritative, not user-spoofable).
-# Tokens:    Lua parses usage.{total,prompt,completion}_tokens from response body.
-#            Skipped for streaming responses (text/event-stream) to avoid buffering.
+# Model:     json_to_metadata extracts "model" from request body (covers 429),
+#            then overwrites from response body on 200 (authoritative).
+# Tokens:    json_to_metadata extracts usage.{total,prompt,completion}_tokens
+#            from response body (application/json only).
 # Scope:     CEL filter restricts to /v1/chat/completions and /v1/completions.
 # Targeting: Gateway API targetRefs.
 #
-# Safety:    Lua body parsing uses pcall — malformed payloads yield "0" tokens,
-#            never crash the filter or drop traffic. The OTel ALS gRPC channel is
-#            async; if the collector is unreachable, Envoy silently discards the
-#            log entry without affecting the request.
+# Streaming (Server-Sent Events):
+#            Token usage IS present in the last SSE chunk, but json_to_metadata
+#            checks the Content-Type header first — sees text/event-stream,
+#            not application/json — and fires on_error without reading the
+#            body at all. It cannot parse SSE framing or wait for the final
+#            event. Tokens report "0"; the request-extracted model stays in
+#            metadata (response model rule has on_present only). The SSE
+#            stream passes through untouched. Accurate streaming token
+#            extraction requires sse_to_metadata (Envoy 1.38+, not yet
+#            shipped in OpenShift Service Mesh).
+#
+# Safety:    on_error / on_missing rules guarantee fallback "0" for tokens.
+#            Model uses on_present only — if the body has no model field or
+#            parsing fails, metadata is simply not set (access log outputs "-").
+#            The OTel ALS gRPC channel is async; if the collector is
+#            unreachable, Envoy silently discards the log entry without
+#            affecting the request.
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter
 metadata:
@@ -23,7 +36,6 @@ metadata:
   labels:
     app.kubernetes.io/part-of: maas-observability
     app.kubernetes.io/managed-by: maas-controller
-    maas.opendatahub.io/config-usage: "true"
 spec:
   targetRefs:
   - group: gateway.networking.k8s.io
@@ -47,12 +59,28 @@ spec:
             - endpoint:
                 address:
                   socket_address:
-                    address: otel-collector.openshift-ingress.svc.cluster.local
+                    address: usage-logs-collector.opendatahub.svc.cluster.local
                     port_value: 4317
 
-  # ── Lua filter 1: Extract model from request body ─────────────────────
-  # INSERT_FIRST so model metadata is available to downstream filters.
-  # Only activates on inference paths; all other requests pass through untouched.
+  # ── json_to_metadata: Extract model + tokens from request/response ────
+  #
+  # Replaces both Lua filters with a single native Envoy filter.
+  #
+  # request_rules  — extracts "model" from the JSON request body.
+  # response_rules — extracts token counts and authoritative model from the
+  #                   JSON response body (application/json only).
+  #
+  # Streaming (SSE) responses:
+  #   Content-Type text/event-stream does NOT match the default
+  #   allow_content_types (application/json), so response_rules immediately
+  #   fire on_error — no body buffering, no interference with the SSE stream.
+  #   Token values default to "0". The response model rule has on_present
+  #   only, so the request-extracted model stays in metadata untouched.
+  #
+  # 429 (rate-limited) responses:
+  #   The error JSON body lacks usage/model fields, so response_rules fire
+  #   on_missing. Tokens default to "0", and the request-extracted model is
+  #   preserved via preserve_existing_metadata_value.
   - applyTo: HTTP_FILTER
     match:
       context: GATEWAY
@@ -63,87 +91,60 @@ spec:
     patch:
       operation: INSERT_FIRST
       value:
-        name: envoy.filters.http.lua.capture_model
+        name: envoy.filters.http.json_to_metadata
         typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
-          default_source_code:
-            inline_string: |
-              function envoy_on_request(request_handle)
-                local path = request_handle:headers():get(":path")
-                if not path then return end
-                if not (string.find(path, "/v1/chat/completions", 1, true)
-                     or string.find(path, "/v1/completions", 1, true)) then
-                  return
-                end
-
-                local ok, model = pcall(function()
-                  local body = request_handle:body()
-                  if not body then return "unknown" end
-                  local raw = body:getBytes(0, body:length())
-                  return string.match(raw, '"model"%s*:%s*"([^"]+)"') or "unknown"
-                end)
-
-                request_handle:streamInfo():dynamicMetadata():set(
-                  "envoy.filters.http.json_to_metadata", "model", ok and model or "unknown")
-              end
-
-  # ── Lua filter 2: Extract token counts from response body ─────────────
-  # INSERT_BEFORE router. Request phase sets a flag; response phase parses tokens.
-  # Streaming responses (text/event-stream) are NOT buffered — tokens report "0".
-  - applyTo: HTTP_FILTER
-    match:
-      context: GATEWAY
-      listener:
-        filterChain:
-          filter:
-            name: envoy.filters.network.http_connection_manager
-            subFilter:
-              name: envoy.filters.http.router
-    patch:
-      operation: INSERT_BEFORE
-      value:
-        name: envoy.filters.http.lua.extract_tokens
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
-          default_source_code:
-            inline_string: |
-              local MD_NS = "envoy.filters.http.json_to_metadata"
-
-              function envoy_on_request(request_handle)
-                local path = request_handle:headers():get(":path")
-                if path and (string.find(path, "/v1/chat/completions", 1, true)
-                          or string.find(path, "/v1/completions", 1, true)) then
-                  request_handle:streamInfo():dynamicMetadata():set(MD_NS, "is_completions", "true")
-                end
-              end
-
-              function envoy_on_response(response_handle)
-                local meta = response_handle:streamInfo():dynamicMetadata():get(MD_NS)
-                if not (meta and meta["is_completions"] == "true") then return end
-
-                local ct = response_handle:headers():get("content-type") or ""
-                if string.find(ct, "text/event-stream", 1, true) then
-                  return
-                end
-
-                local ok, total, prompt, completion, resp_model = pcall(function()
-                  local body = response_handle:body()
-                  if not body then return "0", "0", "0", nil end
-                  local raw = body:getBytes(0, body:length())
-                  return string.match(raw, '"total_tokens"%s*:%s*(%d+)') or "0",
-                         string.match(raw, '"prompt_tokens"%s*:%s*(%d+)') or "0",
-                         string.match(raw, '"completion_tokens"%s*:%s*(%d+)') or "0",
-                         string.match(raw, '"model"%s*:%s*"([^"]+)"')
-                end)
-
-                local md = response_handle:streamInfo():dynamicMetadata()
-                md:set(MD_NS, "tokens_total",      ok and total or "0")
-                md:set(MD_NS, "tokens_prompt",      ok and prompt or "0")
-                md:set(MD_NS, "tokens_completion",  ok and completion or "0")
-                if ok and resp_model then
-                  md:set(MD_NS, "model", resp_model)
-                end
-              end
+          "@type": type.googleapis.com/envoy.extensions.filters.http.json_to_metadata.v3.JsonToMetadata
+          request_rules:
+            rules:
+            - selectors:
+              - key: model
+              on_present:
+                key: model
+          response_rules:
+            rules:
+            # ── Token counts ──
+            - selectors:
+              - key: usage
+              - key: total_tokens
+              on_present:
+                key: tokens_total
+              on_missing:
+                key: tokens_total
+                value: "0"
+              on_error:
+                key: tokens_total
+                value: "0"
+            - selectors:
+              - key: usage
+              - key: prompt_tokens
+              on_present:
+                key: tokens_prompt
+              on_missing:
+                key: tokens_prompt
+                value: "0"
+              on_error:
+                key: tokens_prompt
+                value: "0"
+            - selectors:
+              - key: usage
+              - key: completion_tokens
+              on_present:
+                key: tokens_completion
+              on_missing:
+                key: tokens_completion
+                value: "0"
+              on_error:
+                key: tokens_completion
+                value: "0"
+            # ── Authoritative model from response ──
+            # On 200 JSON: overwrites the request-extracted model with the
+            # response value (authoritative, not user-spoofable).
+            # On SSE/429: no on_missing/on_error configured, so the
+            # request-extracted model stays in metadata untouched.
+            - selectors:
+              - key: model
+              on_present:
+                key: model
 
   # ── OTel Access Log Service ───────────────────────────────────────────
   # CEL filter restricts to inference paths. Attributes streamed via gRPC.
@@ -167,8 +168,9 @@ spec:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter
                   expression: >-
-                    request.path.endsWith('/v1/chat/completions')
-                    || request.path.endsWith('/v1/completions')
+                    request.method == 'POST'
+                    && (request.path.endsWith('/v1/chat/completions')
+                        || request.path.endsWith('/v1/completions'))
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig
               common_config:
@@ -178,19 +180,9 @@ spec:
                   envoy_grpc:
                     cluster_name: otel_als_cluster
               body:
-                string_value: "%REQ(:METHOD)% %REQ(:PATH)% %RESPONSE_CODE%"
+                string_value: "%RESPONSE_CODE% %REQ(:PATH)%"
               attributes:
                 values:
-                # ── Request ──
-                - key: request_id
-                  value:
-                    string_value: "%REQ(X-REQUEST-ID)%"
-                - key: method
-                  value:
-                    string_value: "%REQ(:METHOD)%"
-                - key: path
-                  value:
-                    string_value: "%REQ(:PATH)%"
                 # ── Response ──
                 - key: response_code
                   value:
@@ -198,12 +190,6 @@ spec:
                 - key: response_type
                   value:
                     string_value: '%CEL(response.code >= 200 && response.code < 300 ? "hit" : (response.code == 429 ? "rate_limit" : "error"))%'
-                - key: duration_ms
-                  value:
-                    string_value: "%DURATION%"
-                - key: downstream_remote_address
-                  value:
-                    string_value: "%DOWNSTREAM_REMOTE_ADDRESS%"
                 # ── Identity (Kuadrant WASM filter_state — survives 429) ──
                 - key: user_id
                   value:
@@ -220,7 +206,7 @@ spec:
                 - key: organization_id
                   value:
                     string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%"
-                # ── Tokens (Lua → dynamic metadata) ──
+                # ── Tokens (json_to_metadata → dynamic metadata) ──
                 - key: tokens_total
                   value:
                     string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_total)%"
@@ -230,7 +216,7 @@ spec:
                 - key: tokens_completion
                   value:
                     string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_completion)%"
-                # ── Model (Lua → dynamic metadata) ──
+                # ── Model (json_to_metadata → dynamic metadata) ──
                 - key: model
                   value:
                     string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%"
