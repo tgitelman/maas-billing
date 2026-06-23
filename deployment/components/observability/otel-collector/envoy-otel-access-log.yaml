@@ -79,8 +79,8 @@ spec:
   #
   # 429 (rate-limited) responses:
   #   The error JSON body lacks usage/model fields, so response_rules fire
-  #   on_missing. Tokens default to "0", and the request-extracted model is
-  #   preserved via preserve_existing_metadata_value.
+  #   on_missing. Tokens default to "0". Response model rule has on_present
+  #   only, so the request-extracted model stays in metadata untouched.
   - applyTo: HTTP_FILTER
     match:
       context: GATEWAY
