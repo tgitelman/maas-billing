@@ -14,7 +14,7 @@ spec:
   display:
     name: "Usage Admin Dashboard"
     description: >-
-      Admin view of MaaS API usage. Shows token consumption, request counts,
+      Admin view of model usage. Shows token consumption, request counts,
       rate limiting, and per-user breakdown across all users and subscriptions.
       Queries Loki directly (no user filtering).
   duration: 1h
@@ -144,7 +144,7 @@ spec:
                     name: loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user" [$__range]))
                     or vector(0)
 
@@ -173,7 +173,7 @@ spec:
                     name: loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", response_type="rate_limit"}
+                    subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
                     | user_id=~"$user" [$__range]))
                     or vector(0)
 
@@ -201,11 +201,11 @@ spec:
                     name: loki
                   query: >-
                     (sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user" [$__range]))
                     /
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription"}
+                    subscription=~"$subscription", model=~"$model"}
                     | user_id=~"$user" [$__range])))
                     or vector(1)
 
@@ -233,7 +233,7 @@ spec:
                     name: loki
                   query: >-
                     count(sum by (user_id) (count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription"}
+                    subscription=~"$subscription", model=~"$model"}
                     | user_id=~"$user" | user_id!="" [$__range])))
                     or vector(0)
 

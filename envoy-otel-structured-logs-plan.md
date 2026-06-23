@@ -33,7 +33,7 @@ isProject: false
 
 ## Status: COMPLETE — Final Hybrid Filter Deployed and Verified (2026-06-22)
 
-All core components deployed and verified on cluster `amit.dev.datahub.redhat.com`. Pipeline: Envoy → OTel Collector → Loki. Single consolidated EnvoyFilter (`maas-usage-logs`) combining best of POC and `headers-based-auth-policy` branch: identity from `FILTER_STATE` (POC approach — internal Envoy state, survives 429), token extraction via Lua with `pcall` error safety and streaming detection (branch approach), model extraction from request body (covers 429s) with response-body overwrite on 200s (authoritative, not user-spoofable), CEL filter for inference-only logging, and `response_type` classification (`hit`/`rate_limit`/`error`). 16 attributes per log record. OTel Collector with `groupbyattrs` promoting 7 keys + `transform` stripping WASM-injected double-quotes. LokiStack patched for explicit stream label control. Two Perses dashboards in `kuadrant-system` using `response_type` stream labels for efficient querying.
+All core components deployed and verified on cluster `amit.dev.datahub.redhat.com`. Pipeline: Envoy → OTel Collector → Loki. Single consolidated EnvoyFilter (`maas-model-access-logs`) combining best of POC and `headers-based-auth-policy` branch: identity from `FILTER_STATE` (POC approach — internal Envoy state, survives 429), token extraction via Lua with `pcall` error safety and streaming detection (branch approach), model extraction from request body (covers 429s) with response-body overwrite on 200s (authoritative, not user-spoofable), CEL filter for inference-only logging, and `response_type` classification (`hit`/`rate_limit`/`error`). 16 attributes per log record. OTel Collector with `groupbyattrs` promoting 7 keys + `transform` stripping WASM-injected double-quotes. LokiStack patched for explicit stream label control. Two Perses dashboards in `kuadrant-system` using `response_type` stream labels for efficient querying.
 
 ---
 
@@ -179,7 +179,7 @@ Two datasources in `kuadrant-system` namespace:
 | Namespace | Resources |
 |-----------|-----------|
 | `kuadrant-system` | loki-query-proxy (deployment, SA, RBAC, service), Perses dashboards (usage-admin-loki-dashboard, usage-user-loki-dashboard), datasources (loki, scoped-loki) |
-| `openshift-ingress` | OTel Collector, EnvoyFilter `maas-usage-logs` |
+| `openshift-ingress` | OTel Collector, EnvoyFilter `maas-model-access-logs` |
 | `openshift-logging` | LokiStack `maas-loki` (patched `streamLabels.resourceAttributes`) |
 
 ---
@@ -237,7 +237,7 @@ The monitoring-console-plugin uses prefix matching on datasource names (`OcpData
 
 | File | Change |
 | --- | --- |
-| `deployment/components/observability/otel-collector/envoy-otel-access-log.yaml` | EnvoyFilter `maas-usage-logs`: OTel ALS cluster + 2 Lua filters + CEL-filtered access log (16 attributes). Final consolidated version. |
+| `deployment/components/observability/otel-collector/envoy-otel-access-log.yaml` | EnvoyFilter `maas-model-access-logs`: OTel ALS cluster + 2 Lua filters + CEL-filtered access log (16 attributes). Final consolidated version. |
 | `deployment/components/observability/otel-collector/otel-collector-deployment.yaml` | OTel Collector Deployment (pinned Red Hat image SHA, POD_NAME downward API) |
 | `deployment/components/observability/otel-collector/otel-collector-service.yaml` | Service (port 4317) |
 | `deployment/components/observability/otel-collector/otel-collector-configmap.yaml` | Pipeline: OTLP → resource → transform → groupbyattrs → batch → Loki (sed placeholders) |
@@ -250,7 +250,7 @@ The monitoring-console-plugin uses prefix matching on datasource names (`OcpData
 | `deployment/base/observability/telemetry-policy.yaml` | TelemetryPolicy (subscription, model, organization_id, cost_center) |
 | `scripts/observability/install-observability.sh` | OTel Collector deploy: kustomize build + sed substitution |
 
-### EnvoyFilter: `maas-usage-logs` (Final — Consolidated)
+### EnvoyFilter: `maas-model-access-logs` (Final — Consolidated)
 
 Four patches applied to `maas-default-gateway` via `targetRefs`:
 
@@ -419,7 +419,7 @@ sum by (model, subscription) (count_over_time({service_name="maas-gateway", resp
 {service_name="maas-gateway"} | response_code="500"
 ```
 
-Stat panels use `[$__range]` + `calculation: last`. Table queries use `[$__range] offset -$__range` (Table plugin lacks `calculation` — takes first `query_range` step; negative offset shifts evaluation so the first step covers the correct window). Table Q3 (rate-limited) uses `or (hit * 0)` zero-padding to ensure MergeSeries can join all queries. Fallbacks: `or vector(0)` on stats, `or vector(1)` on Success Rate. Variables use `LokiLabelValuesVariable` (COO 1.5+). `response_type` as stream label enables fast index-level filtering for hit vs rate_limit vs error.
+Stat panels use `[$__range]` + `calculation: last`. Table queries use `[$__range] offset -$__range` (Table plugin lacks `calculation` — takes first `query_range` step; negative offset shifts evaluation so the first step covers the correct window). Table Q3 (rate-limited) uses `or (hit * 0)` zero-padding to ensure MergeSeries can join all queries. All stat panels include `model=~"$model"` filter (model is available on all entries including 429s via Lua `capture_model`). Fallbacks: `or vector(0)` on count stats, `or vector(1)` on Success Rate (no traffic = no failures = 100% correct by vacuous truth; `vector(0)` would falsely suggest outage during idle periods). Variables use `LokiLabelValuesVariable` (COO 1.5+). `response_type` as stream label enables fast index-level filtering for hit vs rate_limit vs error.
 
 ---
 
@@ -457,29 +457,29 @@ Proxy deploys to `kuadrant-system` by default. `install-observability.sh` auto-d
 
 **Note**: Admin Dashboard and Proxy are independent (no code dependency), but User Dashboard requires Proxy (datasource URL points to proxy service). All three dashboard/proxy PRs require the OTel pipeline to be deployed for Loki data to exist.
 
-### PR #995 Review — Round 1 Resolved, Round 2 Open (2026-06-22)
+### PR #995 Review — Round 1 Resolved, Round 2 Resolved (2026-06-22)
 
 **Round 1 (resolved)**: 6 comments addressed — Loki infra files (CA, RBAC, secret) removed from MaaS PRs → platform-level resources for `opendatahub-operator`. Datasource URL fixed (`openshift-logging`), moved to `dashboards/`. Variables upgraded to `LokiLabelValuesVariable` (COO 1.5+).
 
-**Round 2 (open — ahadas + CodeRabbit, 2026-06-22)**:
+**Round 2 (resolved — ahadas + CodeRabbit, 2026-06-22)**:
 
-| # | Source | Comment | Status |
+| # | Source | Comment | Resolution |
 | --- | --- | --- | --- |
-| 1 | ahadas | Datasource display name `"Loki (Admin)"` → should be `"Usage"` (existing Prometheus dashboard becomes `"Usage (metrics)"` or `"Usage (legacy)"`) | Open |
-| 2 | ahadas | Datasource URL should target `opendatahub` namespace (ODH-specific LokiStack), not `openshift-logging` — use DSCI setting | Open |
-| 3 | ahadas | Dashboard description "MaaS API usage" → "model usage" | Open |
-| 4 | ahadas + CodeRabbit | Missing `model=~"$model"` filter in stat panels (totalRequests, totalRateLimited, successRate, activeUsers) — model dropdown doesn't filter stats | Open |
-| 5 | CodeRabbit | Success rate `or vector(1)` returns 100% with no traffic — should be `or vector(0)` | Open |
+| 1 | ahadas | Datasource display name `"Loki (Admin)"` → `"Usage"` | **Fixed.** Display name changed to `"Usage"`. |
+| 2 | ahadas | Datasource URL namespace `openshift-logging` → `opendatahub` | **Fixed.** URL now `__LOKI_GATEWAY_SVC__.opendatahub.svc.cluster.local`. |
+| 3 | ahadas | Dashboard description "MaaS API usage" → "model usage" | **Fixed.** Both admin and user dashboards updated. |
+| 4 | ahadas + CodeRabbit | Missing `model=~"$model"` in stat panels | **Fixed.** Added to totalRequests, totalRateLimited, successRate (numerator + denominator), activeUsers. CodeRabbit's claim that 429s lack model label is incorrect — Lua `capture_model` extracts from request body before rate limiting. |
+| 5 | CodeRabbit | `or vector(1)` → `or vector(0)` in success rate | **Kept `or vector(1)`.** Fallback fires only with zero traffic. No requests = no failures = 100% is correct (vacuous truth). `vector(0)` would show 0% during idle periods, falsely suggesting outage. Actual outages produce failing requests → division returns sub-1.0 value → fallback never fires. |
 
-### PR Description Updates Needed (2026-06-22)
+### PR Description Updates (2026-06-22)
 
-Both #995 and #988 descriptions are **stale** — they reference pre-fix behavior:
+PR descriptions for #995 and #988 were updated to reflect current behavior. Previously stale references corrected:
 - ~~`label_format model="N/A (rate limited)"`~~ → removed; model IS available on 429s (from request body via Lua `capture_model`)
 - ~~`response_code="429"` pipeline filter~~ → replaced with `response_type="rate_limit"` stream label
-- Missing: `offset -$__range` fix for table queries
-- Missing: zero-padding `or (hit * 0)` pattern in Q3
+- Added: `offset -$__range` fix for table queries
+- Added: zero-padding `or (hit * 0)` pattern in Q3
 - ~~"Total Requests"~~ → now "Total Successful Requests" filtering `response_type="hit"`
-- #988 incorrectly states #995 "provides loki/ infrastructure" — those infra files were removed from #995
+- #988 dependency on #995 corrected — Loki infra removed from #995, provisioned by opendatahub-operator
 
 ---
 
@@ -498,7 +498,7 @@ Both #995 and #988 descriptions are **stale** — they reference pre-fix behavio
 1. **~~429 model label~~**: **Resolved.** Model name IS available on 429 responses — Lua `capture_model` extracts it from the request body before rate limiting. No `label_format` workaround needed. Rate-limited requests are queried via `response_type="rate_limit"` stream label with full `sum by (model, subscription)` grouping.
 2. **Upstream WASM shim — token counts**: `set_attribute()` for `body_values` would eliminate `json_to_metadata` (~5-line PR). Not blocking.
 3. **Upstream Kuadrant — dual-listener**: File bug for HTTP+HTTPS duplicate ActionSets → 403.
-4. **POC cluster namespace**: Dashboards deployed in `kuadrant-system` (POC). YAML convention is `opendatahub` per ODH/RHOAI. Future deployments should target `opendatahub`.
+4. **~~POC cluster namespace~~**: **Resolved.** Datasource URL namespace changed from `openshift-logging` to `opendatahub` per ahadas review. YAML convention targets `opendatahub` namespace.
 5. **Loki infra in opendatahub-operator**: CA ConfigMap, ClusterRoleBinding, SA token Secret removed from MaaS PRs — platform-level resources for operator to provision.
 6. **~~CR API version~~**: **Resolved.** CRs migrated to `perses.dev/v1alpha2` (`spec.config.*` structure). Both dashboard and datasource CRs updated.
 7. **`PersesGlobalDatasource`**: Available in `v1alpha2`. Deploy `loki` and `scoped-loki` as global datasources so dashboards in any namespace can reference them without duplicating datasource CRs per namespace.
@@ -507,7 +507,7 @@ Both #995 and #988 descriptions are **stale** — they reference pre-fix behavio
 
 ## Hybrid Filter Alignment Record (2026-06-22)
 
-The final `maas-usage-logs` EnvoyFilter consolidates the original POC (`envoy-otel-access-log-poc-filter-state.yaml`, now deleted) with the `headers-based-auth-policy` branch into a single production-ready filter.
+The final `maas-model-access-logs` EnvoyFilter consolidates the original POC (`envoy-otel-access-log-poc-filter-state.yaml`, now deleted) with the `headers-based-auth-policy` branch into a single production-ready filter.
 
 ### Key Decisions in Consolidation
 
@@ -671,7 +671,7 @@ Our OTel access log EnvoyFilter reads identity from `FILTER_STATE(wasm.kuadrant.
 
 ## Comparison: Final Hybrid vs Original POC vs `headers-based-auth-policy` Branch
 
-The final EnvoyFilter (`maas-usage-logs`) is a hybrid combining the best of the original POC and the `headers-based-auth-policy` branch ([bro-adm/models-as-a-service](https://github.com/bro-adm/models-as-a-service/tree/headers-based-auth-policy)).
+The final EnvoyFilter (`maas-model-access-logs`) is a hybrid combining the best of the original POC and the `headers-based-auth-policy` branch ([bro-adm/models-as-a-service](https://github.com/bro-adm/models-as-a-service/tree/headers-based-auth-policy)).
 
 ### What Was Taken From Each
 

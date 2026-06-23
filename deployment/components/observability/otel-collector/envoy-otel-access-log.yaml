@@ -18,7 +18,7 @@
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter
 metadata:
-  name: maas-usage-logs
+  name: maas-model-access-logs
   namespace: openshift-ingress
   labels:
     app.kubernetes.io/part-of: maas-observability
