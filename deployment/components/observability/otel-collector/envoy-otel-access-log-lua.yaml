@@ -7,7 +7,9 @@
 # Model:     Lua parses "model" from request body (covers 429), then overwrites
 #            from response body on 200 (authoritative, not user-spoofable).
 # Tokens:    Lua parses usage.{total,prompt,completion}_tokens from response body.
-#            Skipped for streaming responses (text/event-stream) to avoid buffering.
+#            Streaming (SSE): bodyChunks() iterates chunks without buffering,
+#            extracts tokens from the final SSE event. Future: sse_to_metadata
+#            (Envoy 1.38+) will replace the Lua bodyChunks() approach.
 # Scope:     CEL filter restricts to /v1/chat/completions and /v1/completions.
 # Targeting: Gateway API targetRefs.
 #
@@ -47,7 +49,7 @@ spec:
             - endpoint:
                 address:
                   socket_address:
-                    address: otel-collector.openshift-ingress.svc.cluster.local
+                    address: usage-logs-collector.opendatahub.svc.cluster.local
                     port_value: 4317
 
   # ── Lua filter 1: Extract model from request body ─────────────────────
@@ -89,7 +91,10 @@ spec:
 
   # ── Lua filter 2: Extract token counts from response body ─────────────
   # INSERT_BEFORE router. Request phase sets a flag; response phase parses tokens.
-  # Streaming responses (text/event-stream) are NOT buffered — tokens report "0".
+  # Non-streaming: body() buffers full response, extracts tokens.
+  # Streaming SSE: bodyChunks() iterates chunks without buffering, scans each
+  # for usage fields. NO break in the loop (Envoy constraint). pcall wraps
+  # both paths for crash safety.
   - applyTo: HTTP_FILTER
     match:
       context: GATEWAY
@@ -122,19 +127,36 @@ spec:
                 if not (meta and meta["is_completions"] == "true") then return end
 
                 local ct = response_handle:headers():get("content-type") or ""
-                if string.find(ct, "text/event-stream", 1, true) then
-                  return
-                end
+                local is_sse = string.find(ct, "text/event-stream", 1, true)
 
-                local ok, total, prompt, completion, resp_model = pcall(function()
-                  local body = response_handle:body()
-                  if not body then return "0", "0", "0", nil end
-                  local raw = body:getBytes(0, body:length())
-                  return string.match(raw, '"total_tokens"%s*:%s*(%d+)') or "0",
-                         string.match(raw, '"prompt_tokens"%s*:%s*(%d+)') or "0",
-                         string.match(raw, '"completion_tokens"%s*:%s*(%d+)') or "0",
-                         string.match(raw, '"model"%s*:%s*"([^"]+)"')
-                end)
+                local ok, total, prompt, completion, resp_model
+                if is_sse then
+                  ok, total, prompt, completion, resp_model = pcall(function()
+                    local t, p, c, m = "0", "0", "0", nil
+                    for chunk in response_handle:bodyChunks() do
+                      local data = chunk:getBytes(0, chunk:length())
+                      local tt = string.match(data, '"total_tokens"%s*:%s*(%d+)')
+                      if tt then
+                        t = tt
+                        p = string.match(data, '"prompt_tokens"%s*:%s*(%d+)') or "0"
+                        c = string.match(data, '"completion_tokens"%s*:%s*(%d+)') or "0"
+                      end
+                      local mm = string.match(data, '"model"%s*:%s*"([^"]+)"')
+                      if mm then m = mm end
+                    end
+                    return t, p, c, m
+                  end)
+                else
+                  ok, total, prompt, completion, resp_model = pcall(function()
+                    local body = response_handle:body()
+                    if not body then return "0", "0", "0", nil end
+                    local raw = body:getBytes(0, body:length())
+                    return string.match(raw, '"total_tokens"%s*:%s*(%d+)') or "0",
+                           string.match(raw, '"prompt_tokens"%s*:%s*(%d+)') or "0",
+                           string.match(raw, '"completion_tokens"%s*:%s*(%d+)') or "0",
+                           string.match(raw, '"model"%s*:%s*"([^"]+)"')
+                  end)
+                end
 
                 local md = response_handle:streamInfo():dynamicMetadata()
                 md:set(MD_NS, "tokens_total",      ok and total or "0")

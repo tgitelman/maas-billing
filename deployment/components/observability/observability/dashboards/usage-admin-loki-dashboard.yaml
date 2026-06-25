@@ -2,6 +2,8 @@
 # Uses $__range to bind LogQL windows to the native time picker.
 # LokiLabelValuesVariable for model/subscription dropdowns (COO 1.5+).
 # CEL filter restricts logs to inference-only paths; no probe traffic to filter.
+# customAllValue: ".*" on ListVariables ensures "All" matches entries with
+# absent labels (e.g. user_id when capturing is disabled). Do not remove.
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
 metadata:
@@ -27,6 +29,7 @@ spec:
           name: "User"
         allowMultiple: true
         allowAllValue: true
+        customAllValue: ".*"
         defaultValue: "$__all"
         plugin:
           kind: LokiLabelValuesVariable
@@ -44,6 +47,7 @@ spec:
           name: "Subscription"
         allowMultiple: true
         allowAllValue: true
+        customAllValue: ".*"
         defaultValue: "$__all"
         plugin:
           kind: LokiLabelValuesVariable
@@ -61,6 +65,7 @@ spec:
           name: "Model"
         allowMultiple: true
         allowAllValue: true
+        customAllValue: ".*"
         defaultValue: "$__all"
         plugin:
           kind: LokiLabelValuesVariable
@@ -344,7 +349,7 @@ spec:
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user"
-                    | unwrap tokens_total [$__range] offset -$__range))
+                    | unwrap tokens_total [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -357,7 +362,7 @@ spec:
                     sum by (model, subscription) (count_over_time(
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | user_id=~"$user" [$__range] offset -$__range))
+                    | user_id=~"$user" [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -370,12 +375,12 @@ spec:
                     sum by (model, subscription) (count_over_time(
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
-                    | user_id=~"$user" [$__range] offset -$__range))
+                    | user_id=~"$user" [$__range]))
                     or
                     (sum by (model, subscription) (count_over_time(
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | user_id=~"$user" [$__range] offset -$__range)) * 0)
+                    | user_id=~"$user" [$__range])) * 0)
 
   layouts:
     - kind: Grid

@@ -14,10 +14,10 @@ todos:
   content: "TODO (deferred): File issue that HTTP+HTTPS listeners cause duplicate ActionSets leading to 403"
   status: pending
 - id: pr-envoyfilter
-  content: "PR: EnvoyFilter — json_to_metadata (supersedes #1031 Lua). Branch: feature/envoy-otel-log-jsontometa. otel_als_cluster + json_to_metadata + CEL-filtered OTel ALS access log with 11 attributes."
+  content: "PR #1035: EnvoyFilter — json_to_metadata + Lua SSE companion (supersedes #1031 Lua). Branch: feature/envoy-otel-log-jsontometa. otel_als_cluster + json_to_metadata + bodyChunks() SSE + CEL-filtered OTel ALS access log with 11 attributes."
   status: pending
 - id: pr-otel-collector
-  content: "PR 4: OTel Collector deployment (Deployment, Service, ConfigMap, RBAC, NetworkPolicy, kustomization) + install-observability.sh changes (sed placeholders, envsubst removal)"
+  content: "PR TBD: OTel Collector CR (v1beta1) + RBAC. Branch: feature/otel-collector. Requires Red Hat build of OTel operator. memory_limiter, error_mode:ignore, sending_queue, user_id emission toggle."
   status: pending
 - id: pr-dashboards
   content: "PR 5: Dashboard migration (Perses usage dashboards with Loki LogQL, loki-query-proxy for user isolation)"
@@ -31,9 +31,15 @@ isProject: false
 
 # Envoy OTel Structured Usage Logs — Implementation Record
 
-## Status: COMPLETE — json_to_metadata Filter Deployed and Verified (2026-06-23)
+## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-06-24)
 
-All core components deployed and verified on cluster `amit.dev.datahub.redhat.com`. Pipeline: Envoy → OTel Collector → Loki. Single consolidated EnvoyFilter (`maas-model-access-logs`) using native Envoy `json_to_metadata` filter (replaces Lua). Identity from `FILTER_STATE` (POC approach — internal Envoy state, survives 429). Model/token extraction via `json_to_metadata` with `on_present` only for model (no "unknown" fallback — prevents log pollution) and `"0"` fallback for tokens. `INSERT_FIRST` position ensures model extraction before rate limiter short-circuits on 429. SSE responses pass through untouched (content-type mismatch triggers immediate on_error, zero buffering). CEL filter for inference-only logging. `response_type` classification (`hit`/`rate_limit`/`error`). 11 attributes per log record. OTel Collector with `groupbyattrs` promoting 7 keys + `transform` stripping WASM-injected double-quotes. LokiStack patched for explicit stream label control. Two Perses dashboards in `kuadrant-system` using `response_type` stream labels for efficient querying.
+All core components deployed and verified on cluster `amit.dev.datahub.redhat.com`. Pipeline: Envoy → OTel Collector (OpenTelemetryCollector CR) → Loki.
+
+**EnvoyFilter** (`maas-model-access-logs`): Native `json_to_metadata` filter + companion Lua SSE filter. Non-streaming: `json_to_metadata` extracts model/tokens from JSON body. Streaming SSE: companion Lua filter uses `bodyChunks()` to iterate chunks without buffering, extracts tokens from the final SSE event. `INSERT_FIRST` for 429 model preservation. CEL filter for inference-only POST logging. `response_type` classification (`hit`/`rate_limit`/`error`). 11 attributes per log record.
+
+**OTel Collector**: `OpenTelemetryCollector` CR (v1beta1) in `opendatahub` namespace via Red Hat build of OpenTelemetry operator. Replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` → `groupbyattrs` (7 stream labels) → `batch` → Loki (`sending_queue` enabled). `user_id` sensitive data emission disabled by default (toggleable via 2-line comment swap in CR).
+
+**Dashboards**: Two Perses dashboards in `kuadrant-system` using `response_type` stream labels for efficient querying. LokiStack patched for explicit stream label control.
 
 ---
 
@@ -100,7 +106,7 @@ flowchart TD
         limitador["Limitador"]
     end
     subgraph obsBlock ["Observability Pipeline"]
-        otelCollector["OTel Collector\n(openshift-ingress)"]
+        otelCollector["OTel Collector CR\n(opendatahub)"]
         loki["LokiStack\n(openshift-logging)"]
     end
     modelServer["Model Server"]
@@ -121,11 +127,14 @@ flowchart TD
 ```mermaid
 flowchart LR
     envoyALS["Envoy OTel ALS"] -->|"gRPC"| otlpRecv["OTLP Receiver :4317"]
-    otlpRecv --> resourceProc["resource processor\n+service.name/namespace/instance.id"]
-    resourceProc --> transformProc["transform\nstrip WASM quotes"]
+    otlpRecv --> memLimiter["memory_limiter\n80% limit, 25% spike"]
+    memLimiter --> resourceProc["resource processor\n+service.name/namespace/instance.id"]
+    resourceProc --> transformProc["transform\nstrip WASM quotes\n(error_mode: ignore)"]
+    transformProc -.->|"optional"| redactProc["transform/redact\ndelete user_id"]
     transformProc --> groupbyProc["groupbyattrs\npromotes: subscription, model,\nresponse_type, method,\nuser_id, key_id, organization_id"]
+    redactProc -.-> groupbyProc
     groupbyProc --> batchProc["batch"]
-    batchProc --> lokiGw["LokiStack Gateway\n(OTLP/HTTP + TLS + bearer)"]
+    batchProc --> lokiGw["LokiStack Gateway\n(OTLP/HTTP + TLS + bearer\nsending_queue: 4 consumers)"]
 ```
 
 ### Dual Data Paths
@@ -150,9 +159,9 @@ flowchart LR
 3. **WASM shim** calls Authorino (kubernetesTokenReview + subscription-info callout). Stores identity in `filter_state` (userid, selected_subscription, keyId, groups_str, organizationId).
 4. **WASM shim** evaluates rate limit (Limitador). On 429, sends local reply — identity `filter_state` is already set, model already extracted from request body.
 5. **Request forwarded** to model server (or 429 local reply if rate limited)
-6. **Model server responds** — `json_to_metadata` `response_rules` extract tokens and authoritative model from JSON body. SSE responses (`text/event-stream`) skip immediately (content-type mismatch → `on_error`, zero buffering). On 429, `on_missing` fires but model not overwritten (only `on_present` configured for response model rule).
+6. **Model server responds** — Non-streaming: `json_to_metadata` `response_rules` extract tokens and authoritative model from JSON body. Streaming SSE: `json_to_metadata` fires `on_error` (content-type mismatch, zero buffering), then companion Lua filter iterates `bodyChunks()` to extract tokens from the last SSE event without buffering. On 429, `on_missing` fires but model not overwritten (only `on_present` configured for response model rule).
 7. **OTel ALS** fires if CEL filter matches (POST to `/v1/chat/completions` or `/v1/completions`). Emits 11 attributes + 2 resource attributes via gRPC to OTel Collector.
-8. **OTel Collector** pipeline: resource → transform (strip quotes) → groupbyattrs (promote 7 keys to resource attributes) → batch → Loki via OTLP/HTTP
+8. **OTel Collector** pipeline: memory_limiter → resource → transform (strip quotes, `error_mode: ignore`) → [optional: transform/redact (delete user_id)] → groupbyattrs (promote 7 keys to resource attributes) → batch → Loki via OTLP/HTTP (sending_queue enabled)
 
 ### Perses Dashboard Architecture
 
@@ -166,18 +175,20 @@ Two datasources in `kuadrant-system` namespace:
 
 **loki-query-proxy** deployed to `kuadrant-system` namespace (default, overridable via kustomize) — Go service that intercepts Loki queries and injects `user_id="<caller>"` filter based on TokenReview of the caller's Kubernetes token.
 
-**Table panel**: Both dashboards have a "Usage breakdown" table with three Loki queries merged via `MergeSeries` transform. All table queries use `offset -$__range` to compensate for Perses Table taking the first `query_range` step (which otherwise evaluates data before the dashboard window):
-- **Q1**: Tokens per model/subscription — `sum by (model, subscription) (sum_over_time(... | unwrap tokens_total [$__range] offset -$__range))`
-- **Q2**: Successful requests per model/subscription — `sum by (model, subscription) (count_over_time(... response_type="hit" ... [$__range] offset -$__range))`
-- **Q3**: Rate-limited requests per model/subscription — `sum by (model, subscription) (count_over_time(... response_type="rate_limit" ... [$__range] offset -$__range)) or (... response_type="hit" ... * 0)`. The `or (hit * 0)` zero-pads model/subscription pairs with no rate-limited traffic, ensuring Q3 returns the same label sets as Q1/Q2 (required for `MergeSeries` to join correctly — it fails when queries return different numbers of series).
+**Table panel**: Both dashboards have a "Usage breakdown" table with three Loki queries merged via `MergeSeries` transform. All table queries use `[$__range]` (negative offset removed — not supported by this Loki version):
+- **Q1**: Tokens per model/subscription — `sum by (model, subscription) (sum_over_time(... | unwrap tokens_total [$__range]))`
+- **Q2**: Successful requests per model/subscription — `sum by (model, subscription) (count_over_time(... response_type="hit" ... [$__range]))`
+- **Q3**: Rate-limited requests per model/subscription — `sum by (model, subscription) (count_over_time(... response_type="rate_limit" ... [$__range])) or (... response_type="hit" ... * 0)`. The `or (hit * 0)` zero-pads model/subscription pairs with no rate-limited traffic, ensuring Q3 returns the same label sets as Q1/Q2 (required for `MergeSeries` to join correctly — it fails when queries return different numbers of series).
 
 ### Deployment Topology
 
 | Namespace | Resources |
 |-----------|-----------|
 | `kuadrant-system` | loki-query-proxy (deployment, SA, RBAC, service), Perses dashboards (usage-admin-loki-dashboard, usage-user-loki-dashboard), datasources (loki, scoped-loki) |
-| `openshift-ingress` | OTel Collector, EnvoyFilter `maas-model-access-logs` |
-| `openshift-logging` | LokiStack `maas-loki` (patched `streamLabels.resourceAttributes`) |
+| `opendatahub` | OpenTelemetryCollector CR `usage-logs` (operator-managed → service `usage-logs-collector`), SA `usage-logs-collector`, ClusterRoleBinding `maas-otel-loki-writer` |
+| `openshift-ingress` | EnvoyFilter `maas-model-access-logs` |
+| `openshift-logging` | LokiStack `maas-loki` (patched `streamLabels.resourceAttributes`), NetworkPolicy allowing collector from `opendatahub` |
+| `openshift-operators` | Red Hat build of OpenTelemetry operator (Subscription `opentelemetry-product`) |
 
 ---
 
@@ -185,12 +196,17 @@ Two datasources in `kuadrant-system` namespace:
 
 | Decision | Rationale |
 | --- | --- |
-| `json_to_metadata` for token/model extraction | Native Envoy filter — replaced Lua after ahadas review (PR #1031). Simpler, faster, no Lua sandbox overhead. `on_present` only for model prevents "unknown" log pollution. SSE skipped via content-type check (zero buffering). See "Why json_to_metadata replaced Lua" section below. |
+| `json_to_metadata` + Lua SSE companion | Native Envoy filter for JSON responses — replaced Lua after ahadas review (PR #1031). Companion Lua filter handles SSE via `bodyChunks()` (zero-buffering chunk iteration). `on_present` only for model prevents "unknown" log pollution. See "Why json_to_metadata replaced Lua" section below. |
 | CEL filter (inference-only) | Only `/v1/chat/completions` and `/v1/completions` logged. POST only. Eliminates noise from `/v1/models`, health checks, etc. |
 | `response_type` via CEL | `hit`/`rate_limit`/`error` — low cardinality stream label for Loki. Exact `response_code` still available as structured metadata. All dashboard stat/table queries use `response_type` for filtering (e.g. "Total Successful Requests" counts only `response_type="hit"`, not all requests). |
 | Identity from WASM filter_state | Set before rate limiting — available on both 200 and 429. Internal Envoy state, never on wire, not spoofable. |
 | EnvoyFilter (not Istio Telemetry CR) | Telemetry API lacks custom OTel attributes; `ConfigMap/istio` owned by ingress-operator |
 | `sed` placeholders (not `envsubst`) | Kustomize can't target YAML-in-YAML |
+| OpenTelemetryCollector CR (not raw Deployment) | Upstream alignment with Red Hat build of OTel operator. Operator manages Deployment, Service, health probes, config volume. Replaces raw ConfigMap+Deployment+Service. Requires `opentelemetry-product` operator from OperatorHub. |
+| `memory_limiter` first in pipeline | OTel Collector best practice — prevents OOM under burst. 80% limit, 25% spike limit, 5s check interval. |
+| `error_mode: ignore` on transform | Malformed attributes (missing field, wrong type) silently skip the statement instead of dropping the entire log record. |
+| `sending_queue` on exporter | Decouples collection from export. 4 consumers, 500-item queue. Prevents backpressure from Loki slowdowns from blocking the receiver. |
+| `user_id` emission toggle (off by default) | `user_id` sensitive data emission disabled by default — deleted before Loki via `transform/redact`. To enable, uncomment `delete_key` in `transform/redact` and `user_id` in `groupbyattrs.keys` (2-line toggle). Dashboard queries use `customAllValue: ".*"` so `user_id=~".*"` matches entries with or without user_id. Only `user_id` is considered sensitive; `groups` is not. |
 | Red Hat OTel Collector image | `ghcr.io` inaccessible from cluster; pinned Red Hat SHA |
 | LokiStack bearer token auth | Gateway requires HTTPS + bearer (not `X-Scope-OrgID` + HTTP) |
 
@@ -234,15 +250,11 @@ The monitoring-console-plugin uses prefix matching on datasource names (`OcpData
 
 | File | Change |
 | --- | --- |
-| `deployment/components/observability/otel-collector/envoy-otel-access-log.yaml` | EnvoyFilter `maas-model-access-logs`: OTel ALS cluster + `json_to_metadata` filter + CEL-filtered access log (11 attributes). Replaced Lua filters. |
-| `deployment/components/observability/otel-collector/envoy-otel-access-log-lua.yaml` | **Archived** — previous Lua-based implementation (2 Lua filters: `capture_model` + `extract_tokens`). Kept for reference. |
-| `deployment/components/observability/otel-collector/otel-collector-deployment.yaml` | OTel Collector Deployment (pinned Red Hat image SHA, POD_NAME downward API) |
-| `deployment/components/observability/otel-collector/otel-collector-service.yaml` | Service (port 4317) |
-| `deployment/components/observability/otel-collector/otel-collector-configmap.yaml` | Pipeline: OTLP → resource → transform → groupbyattrs → batch → Loki (sed placeholders) |
-| `deployment/components/observability/otel-collector/otel-collector-rbac.yaml` | SA + ClusterRole + ClusterRoleBinding for Loki write access |
-| `deployment/components/observability/otel-collector/otel-collector-networkpolicy.yaml` | NetworkPolicy restricting ingress to gateway pods |
-| `deployment/components/observability/otel-collector/loki-gateway-ca-configmap.yaml` | Service CA inject for TLS to Loki gateway |
-| `deployment/components/observability/otel-collector/kustomization.yaml` | Kustomization for all OTel resources |
+| `deployment/components/observability/otel-collector/envoy-otel-access-log.yaml` | EnvoyFilter `maas-model-access-logs`: OTel ALS cluster + `json_to_metadata` + Lua SSE companion (`bodyChunks()`) + CEL-filtered access log (11 attributes). |
+| `deployment/components/observability/otel-collector/envoy-otel-access-log-lua.yaml` | **Archived** — all-Lua implementation (2 Lua filters: `capture_model` + `extract_tokens` with SSE `bodyChunks()` support). Kept for reference. |
+| `deployment/components/observability/otel-collector/otel-collector-cr.yaml` | `OpenTelemetryCollector` CR (v1beta1) — replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` → `groupbyattrs` → `batch` → Loki. Includes `transform/redact` (toggleable user_id removal), `sending_queue`, `error_mode: ignore`. Requires Red Hat build of OTel operator. |
+| `deployment/components/observability/otel-collector/otel-collector-rbac.yaml` | SA `usage-logs-collector` + ClusterRole + ClusterRoleBinding for Loki write access (namespace: `opendatahub`) |
+| `deployment/components/observability/otel-collector/kustomization.yaml` | Kustomization: otel-collector-rbac.yaml + otel-collector-cr.yaml + envoy-otel-access-log.yaml |
 | `deployment/components/observability/loki-proxy/` | Loki query proxy (Go source ConfigMap, deployment, RBAC, service) — PR #999 |
 | `deployment/components/observability/observability/dashboards/` | Perses dashboards (usage-admin, usage-user), datasources (loki, scoped-loki), kustomization — PRs #995, #988 |
 | `deployment/base/observability/telemetry-policy.yaml` | TelemetryPolicy (subscription, model, organization_id, cost_center) |
@@ -250,17 +262,24 @@ The monitoring-console-plugin uses prefix matching on datasource names (`OcpData
 
 ### EnvoyFilter: `maas-model-access-logs` (Final — json_to_metadata)
 
-Three patches applied to `maas-default-gateway` via `targetRefs`:
+Four patches applied to `maas-default-gateway` via `targetRefs`:
 
 **Patch 1 — OTel ALS Cluster**: STRICT_DNS cluster to `usage-logs-collector.opendatahub.svc.cluster.local:4317` (gRPC/H2, 5s connect timeout).
 
 **Patch 2 — `json_to_metadata` (INSERT_FIRST)**: Native Envoy filter replacing both Lua filters. Single filter handles both request and response:
 - `request_rules`: extracts `model` from JSON request body. `on_present` only — if body has no model field or parsing fails, metadata is simply not set (no "unknown" fallback). INSERT_FIRST position ensures model extraction before rate limiter can short-circuit with 429.
 - `response_rules`: extracts `usage.{total_tokens, prompt_tokens, completion_tokens}` with `"0"` fallback (`on_missing`/`on_error`). Extracts authoritative `model` from response (`on_present` only — overwrites request-extracted model on 200 JSON; on SSE/429 the request model stays untouched).
-- **SSE pass-through**: Content-Type `text/event-stream` doesn't match `allow_content_types` (default: `application/json`), so response_rules fire `on_error` immediately — zero body buffering, zero stream interference. Token usage IS in the last SSE chunk but json_to_metadata cannot parse SSE framing. Future `sse_to_metadata` (Envoy 1.38+) will solve this.
+- **SSE pass-through**: Content-Type `text/event-stream` doesn't match `allow_content_types` (default: `application/json`), so response_rules fire `on_error` immediately — zero body buffering, tokens default to "0". The companion Lua SSE filter (Patch 3) then overwrites these with real token values.
 - **429 handling**: Error JSON body lacks usage/model, so `on_missing` fires. Tokens default to "0". Response model rule has `on_present` only, so request-extracted model is preserved.
 
-**Patch 3 — OTel Access Log + CEL Filter**: CEL expression restricts logging to POST requests on inference paths. 11 structured attributes:
+**Patch 3 — Lua SSE Token Extraction (INSERT_BEFORE router)**: Companion to `json_to_metadata` for streaming SSE responses. Request phase sets `is_completions` flag on inference paths. Response phase:
+- Returns early for non-inference requests (no `is_completions` flag) and non-SSE responses (handled by `json_to_metadata`).
+- For `text/event-stream`: iterates `bodyChunks()` — Envoy Lua API that yields response chunks as they arrive without buffering. Each chunk scanned for `usage.{total_tokens, prompt_tokens, completion_tokens}` and `model`; last-seen values win (token info is in the final SSE event).
+- `pcall` wraps the loop for crash safety. No `break` in the `bodyChunks()` loop (Envoy constraint — loop must complete naturally).
+- Writes extracted values to dynamic metadata, overwriting `json_to_metadata`'s "0" defaults.
+- Future: `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) will replace this Lua filter with a native filter.
+
+**Patch 4 — OTel Access Log + CEL Filter**: CEL expression restricts logging to POST requests on inference paths. 11 structured attributes:
 
 | Attribute | Source | Category |
 | --- | --- | --- |
@@ -285,10 +304,16 @@ Resource attributes: `service.name=maas-gateway`, `service.namespace=openshift-i
 
 ### OTel Collector Configuration
 
-POC: raw `Deployment` + `ConfigMap`. Upstream: `OpenTelemetryCollector` CR (OTel Operator). Both have equivalent pipeline logic.
+Deployed as `OpenTelemetryCollector` CR (`v1beta1`) named `usage-logs` via Red Hat build of OpenTelemetry operator. The operator manages Deployment, Service (`usage-logs-collector`, convention: `<cr-name>-collector`), health probes, and config volume automatically.
+
+**Prerequisite**: Red Hat build of OpenTelemetry operator installed via OperatorHub (`opentelemetry-product` Subscription in `openshift-operators`).
 
 ```yaml
 processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
   resource:
     attributes:
     - { action: insert, key: log_type, value: application }
@@ -297,42 +322,61 @@ processors:
     - { action: upsert, key: kubernetes_namespace_name, value: openshift-ingress }
     - { action: upsert, key: service.instance.id, value: "${env:POD_NAME}" }
   transform:
+    error_mode: ignore
     log_statements:
     - context: log
       statements:
-      - replace_pattern(attributes["user_id"], "^\"(.*)\"$", "$$1")
-      - replace_pattern(attributes["subscription"], "^\"(.*)\"$", "$$1")
-      - replace_pattern(attributes["key_id"], "^\"(.*)\"$", "$$1")
-      - replace_pattern(attributes["groups"], "^\"(.*)\"$", "$$1")
-      - replace_pattern(attributes["organization_id"], "^\"(.*)\"$", "$$1")
+      - replace_pattern(attributes["user_id"], "^\"(.*)\"$$", "$$1")
+      - replace_pattern(attributes["subscription"], "^\"(.*)\"$$", "$$1")
+      - replace_pattern(attributes["key_id"], "^\"(.*)\"$$", "$$1")
+      - replace_pattern(attributes["groups"], "^\"(.*)\"$$", "$$1")
+      - replace_pattern(attributes["organization_id"], "^\"(.*)\"$$", "$$1")
+  transform/redact:
+    error_mode: ignore
+    log_statements:
+    - context: log
+      statements:
+      - delete_key(attributes, "user_id")
   groupbyattrs:
     keys: [subscription, model, response_type, method, user_id, key_id, organization_id]
   batch:
     timeout: 5s
     send_batch_size: 100
     send_batch_max_size: 200
+exporters:
+  otlphttp/loki:
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 500
 ```
 
 **Key configuration points**:
+- `memory_limiter` is FIRST in the pipeline — OTel Collector best practice to prevent OOM under burst traffic.
+- `error_mode: ignore` on `transform` processors — malformed attributes silently skip the statement instead of dropping the entire log record.
 - `transform` strips double-quotes from 5 identity attributes (WASM shim wraps some values in quotes).
+- `user_id` emission (**disabled by default**) — `transform/redact` deletes `user_id` from log attributes before Loki. To enable emission, uncomment `delete_key` in `transform/redact` and `user_id` in `groupbyattrs.keys` (2-line toggle in CR). Dashboard variables use `customAllValue: ".*"` so `user_id=~".*"` matches all entries regardless of whether `user_id` is present — admin "All" returns correct totals.
 - `groupbyattrs` promotes 7 keys from log attributes to resource attributes — these become Loki stream labels (controlled by LokiStack `streamLabels.resourceAttributes`).
 - `response_type` (not `response_code`) is a stream label — low cardinality (`hit`/`rate_limit`/`error`), enables efficient Loki filtering.
+- `sending_queue` decouples collection from export — Loki slowdowns don't backpressure the receiver.
 - Loki endpoint via `sed` placeholder at deploy time.
+- CR named `usage-logs` deployed in `opendatahub` namespace. Operator generates service named `usage-logs-collector` (convention: `<cr-name>-collector`).
 
 ### Final Envoy Filter Chain
 
 ```
-[0] envoy.filters.http.json_to_metadata    (INSERT_FIRST — model from request, tokens+model from response)
-[1] istio.metadata_exchange
-[2] envoy.filters.http.ext_proc.bbr-pre
-[3] kuadrant-maas-default-gateway            (WASM shim — auth + rate limit + filter_state)
-[4] envoy.filters.http.ext_proc.bbr
-[5] envoy.filters.http.grpc_stats
-[6] istio.alpn
-[7] envoy.filters.http.fault
-[8] envoy.filters.http.cors
-[9] istio.stats
-[10] envoy.filters.http.router
+[0]  envoy.filters.http.json_to_metadata        (INSERT_FIRST — model from request, tokens+model from JSON response)
+[1]  istio.metadata_exchange
+[2]  envoy.filters.http.ext_proc.bbr-pre
+[3]  kuadrant-maas-default-gateway               (WASM shim — auth + rate limit + filter_state)
+[4]  envoy.filters.http.ext_proc.bbr
+[5]  envoy.filters.http.grpc_stats
+[6]  istio.alpn
+[7]  envoy.filters.http.fault
+[8]  envoy.filters.http.cors
+[9]  istio.stats
+[10] envoy.filters.http.lua.sse_tokens           (INSERT_BEFORE router — SSE bodyChunks() token extraction)
+[11] envoy.filters.http.router
 ```
 
 Access log: `envoy.access_loggers.open_telemetry` with CEL filter on NETWORK_FILTER (runs after response, emits to gRPC asynchronously).
@@ -341,11 +385,11 @@ Access log: `envoy.access_loggers.open_telemetry` with CEL filter on NETWORK_FIL
 
 ## Limitations
 
-1. **SSE streaming**: `json_to_metadata` checks Content-Type header first — `text/event-stream` doesn't match `allow_content_types` (`application/json`), so `on_error` fires immediately. Zero body buffering, zero stream interference. Tokens report "0". Model preserved from request body. Token usage IS in the last SSE chunk but `json_to_metadata` cannot parse SSE framing. Future `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) will extract tokens from the last SSE event.
+1. **SSE streaming tokens**: Handled by companion Lua filter using `bodyChunks()` API. Response filters run in reverse chain order: Lua SSE (later in chain) processes the response FIRST and writes real token values, then `json_to_metadata` (first in chain) processes the response LAST. Without `preserve_existing_metadata_value: true` on `on_error`/`on_missing`, `json_to_metadata` would overwrite the Lua-extracted tokens with "0". The `preserve_existing_metadata_value` flag ensures Lua-set values survive. Stream passes through untouched to the client. Model preserved from request body. Requires `stream_options: {"include_usage": true}` on the client request for the model server to emit usage in the final SSE chunk (`llm-d-inference-sim` v0.8.2+ supports this). Future: `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) will replace the Lua companion with a native filter. **Note**: If the model server does not emit `usage` in the final SSE chunk, tokens will remain "0" — this is a model server behavior, not a filter limitation.
 2. **429 lack `tokens`**: Rate limiting happens before backend response → `tokens_*` = "0". Model name IS available (from request body via `json_to_metadata` INSERT_FIRST — runs before rate limiter). `response_type="rate_limit"` stream label enables dashboard filtering.
 3. **`organization_id` not yet populated**: Upstream AuthPolicy does not populate `wasm.kuadrant.auth.identity.organizationId` yet. Pre-wired in filter; will auto-populate when upstream data is available.
 4. **Dual-listener 403**: HTTP+HTTPS listeners → duplicate ActionSets. Workaround: remove HTTP listener.
-5. **Perses Table has no `calculation` field**: Unlike `StatChart` (which supports `calculation: last`), the Table plugin always uses the first `query_range` step. Since `[$__range]` at the first step looks back before the dashboard window, table queries use `[$__range] offset -$__range` to shift the evaluation forward so the first step covers the correct `[start, end]` window. Stat panels work correctly with `[$__range]` + `calculation: last` (takes the last step).
+5. **Perses Table queries**: Table queries use `[$__range]` without `offset`. Negative offset (`offset -$__range`) was removed — not supported by the deployed Loki version (requires Loki 3.0+). Stat panels work correctly with `[$__range]` + `calculation: last` (takes the last step).
 6. **Success rate definition inconsistency** (TODO): Three dashboards define "Success Rate" differently:
    - **Perses Prometheus** (`usage-dashboard.yaml`): `authorized_calls / (authorized_calls + limited_calls)` — 429s count as failures. Upstream `main` has the same formula.
    - **Loki admin/user** (`usage-admin-loki-dashboard.yaml`, `usage-user-loki-dashboard.yaml`): `count(hit) / count(all)` — 429s count as failures. Consistent with upstream Perses.
@@ -392,7 +436,17 @@ Go source (~160 lines, stdlib only) mounted as ConfigMap, run with `go run` on s
 
 ## Verified Test Results
 
-### json_to_metadata (2026-06-23, current)
+### json_to_metadata + SSE companion via OTel Collector CR (2026-06-24, current)
+
+- **200 non-streaming (`hit`)**: 11 attributes populated — `model=test/e2e-distinct-model` (from response body, authoritative), `tokens_total=38`, `tokens_prompt=8`, `tokens_completion=30`, `response_type=hit`. Data flows through CR-managed collector (`usage-logs-collector` in `opendatahub`) to Loki.
+- **200 streaming SSE (`hit`)**: `model=test/e2e-distinct-model-2`, `tokens_total=76`, `tokens_prompt=8`, `tokens_completion=68` — extracted by Lua SSE companion from final SSE chunk (requires `stream_options.include_usage=true`). `preserve_existing_metadata_value: true` prevents `json_to_metadata` from overwriting Lua-set values. Stream passed through untouched.
+- **429 rate-limited (`rate_limit`)**: `model=test/e2e-distinct-model` (from request body — INSERT_FIRST runs before rate limiter). `tokens_total=0`, `tokens_prompt=0`, `tokens_completion=0`. Identity fully populated from filter_state (`user_id=kube:admin`, `subscription=distinct-subscription`, `key_id`, `groups`, `organization_id`).
+- **Both models**: `test/e2e-distinct-model` and `test/e2e-distinct-model-2` — both correctly extracted and visible in Loki.
+- **No "unknown" entries**: Zero "unknown" model entries in Loki. `on_present` only for model prevents log pollution.
+- **Non-inference** (`/v1/models`, health checks, GET requests): **NOT logged** — CEL filter restricts to POST on `/v1/chat/completions` and `/v1/completions` only.
+- **OTel Collector CR**: 2 replicas running, `memory_limiter` active (512Mi limit, 80% threshold), `sending_queue` enabled (4 consumers). Logs successfully exported to Loki via OTLP/HTTP with bearer token auth and TLS.
+
+### json_to_metadata without SSE companion (2026-06-23, previous)
 
 - **200 non-streaming (`hit`)**: 11 attributes populated — `model=test/e2e-distinct-model` (from response body, authoritative), `tokens_total=61`, `response_type=hit`
 - **200 streaming SSE (`hit`)**: `model=test/e2e-distinct-model` (from request body, preserved — response model rule has `on_present` only). `tokens_total=0` (expected — `json_to_metadata` can't parse SSE). Stream passed through untouched, zero buffering.
@@ -400,11 +454,22 @@ Go source (~160 lines, stdlib only) mounted as ConfigMap, run with `go run` on s
 - **No "unknown" entries**: Zero "unknown" model entries in Loki after fix. Previous "unknown" entries were caused by `on_missing`/`on_error` fallback values — removed by using `on_present` only.
 - **Non-inference** (`/v1/models`, health checks, GET requests): **NOT logged** — CEL filter restricts to POST on `/v1/chat/completions` and `/v1/completions` only.
 
-### Lua (2026-06-22, archived)
+### Lua (2026-06-24, re-verified on cluster)
 
-- **200 inference (`hit`)**: 16 attributes populated — `user_id=kube:admin`, `subscription=simulator-subscription`, `model=facebook/opt-125m`, `key_id=2a56fdd9-...` (no quotes), `groups=system:cluster-admins,system:authenticated` (no quotes), `tokens_total=33`, `tokens_prompt=8`, `tokens_completion=25`, `response_type=hit`, `response_code=200`
-- **429 rate-limited (`rate_limit`)**: Identity fully populated. `model=facebook/opt-125m` (from request body). `tokens_*=-` (no backend response). `response_type=rate_limit`.
-- **Loki stream cardinality**: 2 unique streams for mixed 200/429 traffic (one per `response_type` value). 10 stream labels, 14 structured metadata keys.
+- **200 non-streaming (`hit`)**: Tokens extracted correctly — `model=test/e2e-distinct-model`, `tokens_total=45`, `tokens_prompt=10`, `tokens_completion=35`.
+- **200 SSE streaming with `include_usage` (`hit`)**: Tokens extracted via `bodyChunks()` — `model=test/e2e-distinct-model-2`, `tokens_total=76`, `tokens_prompt=8`, `tokens_completion=68`. No `preserve_existing_metadata_value` issue (no `json_to_metadata` filter to overwrite).
+- **200 SSE streaming without `include_usage` (`hit`)**: `tokens_total=0` (expected — model emits `usage:null`).
+- **429 rate-limited (`rate_limit`)**: `model=test/e2e-distinct-model` (from request body). `tokens_*=-` (Lua doesn't set fallback "0"). `response_type=rate_limit`.
+- **400/404 errors (`error`)**: `model=unknown` — **Bug confirmed**: Lua `capture_model` falls back to `"unknown"` on parse failure, polluting Loki with `model="unknown"` stream label. 3 `unknown` entries found.
+- **GET request logged**: CEL filter lacks `request.method == 'POST'` check — GET on completions path is logged (405 response logged as `error`).
+- **Token dash values**: Rate-limited entries show `tokens_*=-` (not `"0"`), which breaks `unwrap tokens_total` in LogQL (not a number → silent data loss).
+
+**Bugs confirmed in Lua (all fixed in json_to_metadata)**:
+1. `model="unknown"` pollution (3 entries)
+2. `tokens_*=-` instead of `"0"` on 429 (breaks `unwrap`)
+3. Missing POST check in CEL (GET requests logged)
+4. Extra attributes still present (5 attributes ahadas asked to remove)
+5. `config-usage` label still present
 
 ---
 
@@ -430,15 +495,21 @@ sum by (model, subscription) (count_over_time({service_name="maas-gateway", resp
 {service_name="maas-gateway"} | response_code="500"
 ```
 
-Stat panels use `[$__range]` + `calculation: last`. Table queries use `[$__range] offset -$__range` (Table plugin lacks `calculation` — takes first `query_range` step; negative offset shifts evaluation so the first step covers the correct window). Table Q3 (rate-limited) uses `or (hit * 0)` zero-padding to ensure MergeSeries can join all queries. All stat panels include `model=~"$model"` filter (model is available on all entries including 429s via Lua `capture_model`). Fallbacks: `or vector(0)` on count stats, `or vector(1)` on Success Rate (no traffic = no failures = 100% correct by vacuous truth; `vector(0)` would falsely suggest outage during idle periods). Variables use `LokiLabelValuesVariable` (COO 1.5+). `response_type` as stream label enables fast index-level filtering for hit vs rate_limit vs error.
+Stat panels use `[$__range]` + `calculation: last`. Table queries use `[$__range]` (negative offset removed — not supported by deployed Loki). Table Q3 (rate-limited) uses `or (hit * 0)` zero-padding to ensure MergeSeries can join all queries. All stat panels include `model=~"$model"` filter (model is available on all entries including 429s via Lua `capture_model`). Fallbacks: `or vector(0)` on count stats, `or vector(1)` on Success Rate (no traffic = no failures = 100% correct by vacuous truth; `vector(0)` would falsely suggest outage during idle periods). Variables use `LokiLabelValuesVariable` (COO 1.5+). `response_type` as stream label enables fast index-level filtering for hit vs rate_limit vs error.
 
 ---
 
 ## Deployment Procedure (Current)
 
 ```bash
-# 1. Deploy OTel Collector + EnvoyFilter (auto-detects LokiStack, configures endpoint)
-scripts/observability/install-observability.sh
+# 0. Prerequisites: Red Hat build of OpenTelemetry operator
+#    Install via OperatorHub: Subscription "opentelemetry-product" in openshift-operators
+#    Verify: oc get crd opentelemetrycollectors.opentelemetry.io
+
+# 1. Deploy OTel Collector CR + RBAC + EnvoyFilter
+#    (resolve LOKI_OTLP_ENDPOINT_PLACEHOLDER and LOKI_TLS_INSECURE_SKIP_VERIFY_PLACEHOLDER
+#     in otel-collector-cr.yaml before applying)
+kubectl apply -k deployment/components/observability/otel-collector/
 
 # 2. Deploy loki-query-proxy (Go compiles on first start, ~60-90s)
 kubectl apply -k deployment/components/observability/loki-proxy/
@@ -446,9 +517,13 @@ kubectl rollout status deployment/loki-query-proxy-user -n kuadrant-system --tim
 
 # 3. Deploy Perses dashboards + datasources
 kubectl apply -k deployment/components/observability/observability/dashboards/
+
+# 4. Verify NetworkPolicy allows collector → Loki gateway
+#    The Loki gateway NetworkPolicy in openshift-logging must allow ingress from
+#    opendatahub namespace, pod label app.kubernetes.io/name=usage-logs-collector
 ```
 
-Proxy deploys to `kuadrant-system` by default. `install-observability.sh` auto-detects LokiStack, substitutes `sed` placeholders, applies with `--server-side=true`.
+Proxy deploys to `kuadrant-system` by default. OTel Collector CR `usage-logs` generates service `usage-logs-collector` in `opendatahub` namespace — EnvoyFilter's cluster endpoint must match.
 
 ---
 
@@ -458,12 +533,12 @@ Proxy deploys to `kuadrant-system` by default. `install-observability.sh` auto-d
 
 | PR | Branch | Scope | Files | Dependencies |
 | --- | --- | --- | --- | --- |
-| [#995](https://github.com/opendatahub-io/models-as-a-service/pull/995) Admin Dashboard | `feature-loki-admin-dashboard` | Admin usage dashboard + `loki` datasource (direct to LokiStack). `LokiLabelValuesVariable` (COO 1.5+). Table: `offset -$__range`, zero-padding, `response_type` stream labels. `v1alpha2` API. | 3 files, 477 lines | LokiStack + OTel pipeline deployed. Loki infra (CA, RBAC, secret) provisioned by opendatahub-operator. |
-| [#988](https://github.com/opendatahub-io/models-as-a-service/pull/988) User Dashboard | `feature/loki-user-dashboard` | User-scoped dashboard + `scoped-loki` datasource (through proxy). `LokiLabelValuesVariable`. Same table fixes as #995. `v1alpha2` API. | 3 files, 409 lines | Proxy PR (#999). Loki infra provisioned by opendatahub-operator. |
+| [#995](https://github.com/opendatahub-io/models-as-a-service/pull/995) Admin Dashboard | `feature-loki-admin-dashboard` | Admin usage dashboard + `loki` datasource (direct to LokiStack). `LokiLabelValuesVariable` (COO 1.5+). `customAllValue: ".*"` for absent-label matching. `response_type` stream labels. `v1alpha2` API. | 3 files, 477 lines | LokiStack + OTel pipeline deployed. Loki infra (CA, RBAC, secret) provisioned by opendatahub-operator. |
+| [#988](https://github.com/opendatahub-io/models-as-a-service/pull/988) User Dashboard | `feature/loki-user-dashboard` | User-scoped dashboard + `scoped-loki` datasource (through proxy). `LokiLabelValuesVariable`. `customAllValue: ".*"`. `v1alpha2` API. | 3 files, 409 lines | Proxy PR (#999). Loki infra provisioned by opendatahub-operator. |
 | [#999](https://github.com/opendatahub-io/models-as-a-service/pull/999) Loki Query Proxy | `feature/loki-user-proxy` | Go proxy: ConfigMap source, deployment, RBAC, service, kustomization. AllowedPaths includes label/series endpoints. `LOKI_UPSTREAM_URL` uses `__LOKI_GATEWAY_SVC__` sed placeholder. | 5 files, 672 lines | None (standalone) |
-| [#1031](https://github.com/opendatahub-io/models-as-a-service/pull/1031) EnvoyFilter (Lua) — **Superseded** | `feature/envoy-otel-access-log-filter` | Original Lua-based EnvoyFilter. Superseded by json_to_metadata PR below. | 1 file, 244 lines | — |
-| [NEW](https://github.com/opendatahub-io/models-as-a-service/compare/main...tgitelman:maas-billing:feature/envoy-otel-log-jsontometa) EnvoyFilter (json_to_metadata) | `feature/envoy-otel-log-jsontometa` | **Supersedes #1031.** Native `json_to_metadata` filter replacing Lua. `on_present` only for model (no "unknown" pollution). INSERT_FIRST for 429 model preservation. 11 attributes. All ahadas review comments addressed. | 1 file, 231 lines | OTel Collector deployed on port 4317 |
-| TBD — OTel Collector ConfigMap | `feature/otel-collector` | Pipeline ConfigMap: OTLP → resource → transform (strip WASM quotes) → groupbyattrs (7 stream labels) → batch → Loki. Platform infra (Deployment, Service, RBAC, NetworkPolicy, CA) to be provisioned by operator. | 1 file, 85 lines | EnvoyFilter PR. LokiStack with streamLabels configured. |
+| [#1031](https://github.com/opendatahub-io/models-as-a-service/pull/1031) EnvoyFilter (Lua) — **Closed, superseded by #1035** | `feature/envoy-otel-access-log-filter` | Original Lua-based EnvoyFilter. Superseded by #1035 (json_to_metadata). | 1 file, 244 lines | — |
+| [#1035](https://github.com/opendatahub-io/models-as-a-service/pull/1035) EnvoyFilter (json_to_metadata + Lua SSE) | `feature/envoy-otel-log-jsontometa` | **Supersedes #1031.** Native `json_to_metadata` + companion Lua `bodyChunks()` SSE filter. `on_present` only for model (no "unknown" pollution). INSERT_FIRST for 429 model preservation. 11 attributes. All ahadas review comments addressed. | 1 file | OTel Collector deployed on port 4317 |
+| TBD — OTel Collector CR | `feature/otel-collector` | `OpenTelemetryCollector` CR (v1beta1): `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` (user_id emission toggle) → `groupbyattrs` (7 stream labels) → `batch` → Loki (`sending_queue`). User_id emission disabled by default. Requires Red Hat build of OTel operator. SA + RBAC for Loki write access. | 2 files (CR + RBAC) | EnvoyFilter PR. OTel operator installed. LokiStack with streamLabels configured. |
 
 **Merge order**: EnvoyFilter → OTel Collector → Proxy (#999) → Admin Dashboard (#995) → User Dashboard (#988).
 
@@ -488,7 +563,7 @@ Proxy deploys to `kuadrant-system` by default. `install-observability.sh` auto-d
 PR descriptions for #995 and #988 were updated to reflect current behavior. Previously stale references corrected:
 - ~~`label_format model="N/A (rate limited)"`~~ → removed; model IS available on 429s (from request body via Lua `capture_model`)
 - ~~`response_code="429"` pipeline filter~~ → replaced with `response_type="rate_limit"` stream label
-- Added: `offset -$__range` fix for table queries
+- Added: `customAllValue: ".*"` for absent-label matching. Removed `offset -$__range` (unsupported by Loki version)
 - Added: zero-padding `or (hit * 0)` pattern in Q3
 - ~~"Total Requests"~~ → now "Total Successful Requests" filtering `response_type="hit"`
 - #988 dependency on #995 corrected — Loki infra removed from #995, provisioned by opendatahub-operator
@@ -574,7 +649,9 @@ Score: json_to_metadata 11/11, Lua 2/11.
 
 Token usage IS present in the last SSE chunk (`data: {"usage": {...}}`), but `json_to_metadata` checks the response `Content-Type` header first. `text/event-stream` doesn't match `allow_content_types` (default: `application/json`), so `on_error` fires immediately without reading the body. Adding `text/event-stream` to `allow_content_types` would cause the filter to buffer the entire SSE stream (breaking real-time delivery) and then fail JSON parsing anyway (SSE is `data: {...}\n\n`, not valid JSON).
 
-Future: `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) understands SSE framing and can extract from the last event. `json_to_metadata` and `sse_to_metadata` complement each other — `json_to_metadata` skips `text/event-stream`, `sse_to_metadata` only processes `text/event-stream`. Zero conflict.
+**Current solution**: Companion Lua filter (`envoy.filters.http.lua.sse_tokens`) positioned `INSERT_BEFORE router`. Uses `bodyChunks()` — Envoy's Lua API for non-buffering response body iteration. Each chunk is scanned for `usage.{total_tokens, prompt_tokens, completion_tokens}` and `model`; last-seen values win (token info is in the final SSE event). The stream passes through to the client untouched. `pcall` wraps the loop for crash safety. No `break` in the loop (Envoy constraint — `bodyChunks()` must complete naturally).
+
+**Future**: `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) understands SSE framing natively and can extract from the last event. `json_to_metadata` and `sse_to_metadata` complement each other — `json_to_metadata` skips `text/event-stream`, `sse_to_metadata` only processes `text/event-stream`. Zero conflict. When available, the Lua SSE companion filter will be replaced.
 
 ### Envoy version compatibility
 
@@ -584,7 +661,24 @@ Future: `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) understands SSE framing
 | 3.0 | 1.24 | ~1.32 | Available | No |
 | Future (12-18mo) | — | 1.38+ | Available | Available |
 
-### Tested scenarios (cluster verification 2026-06-23)
+### Tested scenarios (cluster verification 2026-06-24, CR + SSE companion + user_id emission toggle)
+
+| Scenario | Model | Tokens | Response Type | Verified in Loki |
+| --- | --- | --- | --- | --- |
+| Non-streaming 200 | `test/e2e-distinct-model` (from response, authoritative) | `38` (total=38, prompt=8, completion=30) | `hit` | Yes |
+| Non-streaming 200 (model 2) | `test/e2e-distinct-model-2` (from response) | Extracted | `hit` | Yes |
+| **Streaming SSE 200** | `test/e2e-distinct-model-2` (from SSE chunks) | `76` (total=76, prompt=8, completion=68) | `hit` | Yes |
+| 429 rate-limited | `test/e2e-distinct-model` (from request, preserved) | `0` (all three) | `rate_limit` | Yes |
+| 500 error | `test/e2e-distinct-model` | `0` | `error` | Yes |
+| No "unknown" entries | All entries have real model names | — | — | Yes |
+| OTel Collector CR | Data flows through `usage-logs-collector` (opendatahub) | — | — | Yes |
+| memory_limiter active | 512Mi limit, 80% threshold, 25% spike | — | — | Yes (collector logs) |
+| user_id emission disabled | `user_id` absent from new entries (transform/redact) | — | — | Yes |
+| `user_id=~".*"` (All) | Returns ALL entries including those without user_id | — | — | Yes |
+| `user_id=~"kube:admin"` | Returns only entries with user_id present | — | — | Yes |
+| `customAllValue: ".*"` | Perses "All" dropdown uses `.*` not pipe-joined values | — | — | Yes (dashboard fix) |
+
+### Tested scenarios (cluster verification 2026-06-23, json_to_metadata only)
 
 | Scenario | Model | Tokens | Response Type | Verified in Loki |
 | --- | --- | --- | --- | --- |
@@ -593,6 +687,19 @@ Future: `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) understands SSE framing
 | 429 rate-limited | `test/e2e-distinct-model` (from request, preserved) | `0` (expected) | `rate_limit` | Yes |
 | 401 unauthorized | `test/e2e-distinct-model` (from request) | `0` | `error` | Yes |
 | No "unknown" entries | All new entries have real model names | — | — | Yes |
+
+### Tested scenarios (cluster verification 2026-06-24, Lua filter)
+
+| Scenario | Model | Tokens | Response Type | Verified in Loki |
+| --- | --- | --- | --- | --- |
+| Non-streaming 200 | `test/e2e-distinct-model` | `45` (total=45, prompt=10, completion=35) | `hit` | Yes |
+| **Streaming SSE 200 (include_usage)** | `test/e2e-distinct-model-2` | `76` (total=76, prompt=8, completion=68) | `hit` | Yes |
+| Streaming SSE 200 (no include_usage) | `test/e2e-distinct-model` | `0` | `hit` | Yes |
+| 429 rate-limited | `test/e2e-distinct-model` | `-` (**BUG**: not `"0"`, breaks `unwrap`) | `rate_limit` | Yes |
+| 400 malformed body | `unknown` (**BUG**: model="unknown" pollution) | `0` | `error` | Yes |
+| 404 missing model | `unknown` (**BUG**: model="unknown" pollution) | `0` | `error` | Yes |
+| GET request logged | `unknown` (**BUG**: no POST check in CEL) | `-` | `error` | Yes |
+| **"unknown" model entries** | **3 entries** (vs 0 in json_to_metadata) | — | — | **BUG confirmed** |
 
 ### Files
 

@@ -3,13 +3,7 @@ kind: Kustomization
 metadata:
   name: maas-otel-collector
 
-namespace: openshift-ingress
-
 resources:
-  - loki-gateway-ca-configmap.yaml
   - otel-collector-rbac.yaml
-  - otel-collector-configmap.yaml
-  - otel-collector-deployment.yaml
-  - otel-collector-service.yaml
-  - otel-collector-networkpolicy.yaml
+  - otel-collector-cr.yaml
   - envoy-otel-access-log.yaml
