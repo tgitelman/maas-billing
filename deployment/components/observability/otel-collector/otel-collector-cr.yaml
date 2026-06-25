@@ -99,7 +99,7 @@ spec:
         - context: log
           statements:
           # user_id sensitive data — emission disabled by default.
-          # To enable: uncomment the delete_key line below and
+          # To enable: comment the delete_key line below and
           # uncomment user_id in groupbyattrs.keys.
           - delete_key(attributes, "user_id")
       groupbyattrs:
@@ -111,7 +111,7 @@ spec:
         - key_id
         - organization_id
         # user_id emission disabled by default (sensitive data).
-        # To enable, also uncomment delete_key in transform/redact above.
+        # To enable, uncomment the line below and comment delete_key in transform/redact above.
         # - user_id
       batch:
         timeout: 5s
