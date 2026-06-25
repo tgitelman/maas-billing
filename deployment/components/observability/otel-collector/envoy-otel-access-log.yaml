@@ -300,16 +300,21 @@ spec:
                 - key: response_type
                   value:
                     string_value: '%CEL(response.code >= 200 && response.code < 300 ? "hit" : (response.code == 429 ? "rate_limit" : "error"))%'
-                # ── Identity (Kuadrant WASM filter_state — survives 429) ──
+                # ── Identity ──
+                # user_id: FILTER_STATE first (ODH, survives 429), falls
+                # back to X-MaaS-Username header (RHOAI 200s).
                 - key: user_id
                   value:
-                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%"
+                    string_value: '%CEL("wasm.kuadrant.auth.identity.userid" in filter_state && filter_state["wasm.kuadrant.auth.identity.userid"] != "-" ? filter_state["wasm.kuadrant.auth.identity.userid"] : request.headers["x-maas-username"])%'
+                # subscription and groups use X-MaaS-* headers (Authorino):
+                # works on both ODH and RHOAI for non-rate-limited responses.
+                # Returns "-" on 429 (rate limiter fires before Authorino).
                 - key: subscription
                   value:
-                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.selected_subscription:PLAIN)%"
+                    string_value: "%REQ(X-MaaS-Subscription)%"
                 - key: groups
                   value:
-                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.groups_str:PLAIN)%"
+                    string_value: "%REQ(X-MaaS-Group)%"
                 - key: key_id
                   value:
                     string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%"
