@@ -282,6 +282,10 @@ spec:
                 header: "Key ID"
                 align: "left"
                 enableSorting: true
+              - name: "key_name"
+                header: "Key Name"
+                align: "left"
+                enableSorting: true
               - name: "value #1"
                 header: "Tokens used"
                 align: "right"
@@ -314,7 +318,7 @@ spec:
                     kind: LokiDatasource
                     name: scoped-loki
                   query: >-
-                    sum by (model, subscription, key_id) (sum_over_time(
+                    sum by (model, subscription, key_id, key_name) (sum_over_time(
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
                     | unwrap tokens_total [$__range]))
@@ -327,7 +331,7 @@ spec:
                     kind: LokiDatasource
                     name: scoped-loki
                   query: >-
-                    sum by (model, subscription, key_id) (count_over_time(
+                    sum by (model, subscription, key_id, key_name) (count_over_time(
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
                     [$__range]))
@@ -340,12 +344,12 @@ spec:
                     kind: LokiDatasource
                     name: scoped-loki
                   query: >-
-                    sum by (model, subscription, key_id) (count_over_time(
+                    sum by (model, subscription, key_id, key_name) (count_over_time(
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="rate_limit"}
                     [$__range]))
                     or
-                    (sum by (model, subscription, key_id) (count_over_time(
+                    (sum by (model, subscription, key_id, key_name) (count_over_time(
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
                     [$__range])) * 0)

@@ -127,10 +127,10 @@ echo -e "${GREEN}✓ API key created successfully (name: $KEY_NAME)${NC}"
 
 echo -e "${BLUE}Discovering available models...${NC}"
 MODELS_RESPONSE=$(curl -sSk \
-    -H "Authorization: Bearer $TOKEN" \
+    -H "Authorization: Bearer $OC_TOKEN" \
     -H "Content-Type: application/json" \
     -w "\nHTTP_STATUS:%{http_code}\n" \
-    "${API_BASE}/maas-api/v1/models" 2>&1)
+    "${API_BASE}/v1/models" 2>&1)
 
 http_status=$(echo "$MODELS_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
 response_body=$(echo "$MODELS_RESPONSE" | sed '/HTTP_STATUS:/d')
