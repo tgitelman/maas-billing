@@ -247,8 +247,33 @@ echo ""
 if [ ${#MODEL_IDS[@]} -eq 0 ]; then
     echo -e "${YELLOW}Skipping rate limit test - no models available${NC}"
 else
-    model_id="${MODEL_IDS[0]}"
-    model_url="${MODEL_URLS[0]}"
+    # Pick a model that responded successfully during inference testing;
+    # the first model in the discovery list may belong to a different
+    # subscription than the API key we created.
+    rl_model_id=""
+    rl_model_url=""
+    for idx in "${!MODEL_IDS[@]}"; do
+        test_body=$(cat <<RLEOF
+{"model":"${MODEL_IDS[$idx]}","messages":[{"role":"user","content":"ping"}],"max_tokens":5}
+RLEOF
+)
+        probe_status=$(curl -sSk -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -X POST -d "$test_body" \
+            "${MODEL_URLS[$idx]}/v1/chat/completions" 2>/dev/null)
+        if [ "$probe_status" = "200" ] || [ "$probe_status" = "429" ]; then
+            rl_model_id="${MODEL_IDS[$idx]}"
+            rl_model_url="${MODEL_URLS[$idx]}"
+            break
+        fi
+    done
+
+    if [ -z "$rl_model_id" ]; then
+        echo -e "${YELLOW}Skipping rate limit test - no accessible model found for API key${NC}"
+    else
+    model_id="$rl_model_id"
+    model_url="$rl_model_url"
     
     echo -e "${BLUE}Making rapid requests to trigger rate limit...${NC}"
     echo "Using model: $model_id"
@@ -315,6 +340,7 @@ EOF
     else
         echo -e "  • Rate limiting: ${YELLOW}⚠ Not triggered${NC} (may need more requests or lower limits)"
     fi
+    fi
 fi
 
 echo ""
@@ -343,12 +369,14 @@ fi
 echo ""
 
 echo -e "${BLUE}Rate Limiting:${NC}"
-if [ ${#MODEL_IDS[@]} -gt 0 ]; then
-    if [ "$rate_limited" = true ]; then
+if [ ${#MODEL_IDS[@]} -gt 0 ] && [ -n "${rl_model_id:-}" ]; then
+    if [ "${rate_limited:-false}" = true ]; then
         echo -e "  ${GREEN}✓${NC} Token rate limiting is enforced"
     else
         echo -e "  ${YELLOW}⚠${NC}  Token rate limiting not triggered (may need adjustment)"
     fi
+elif [ ${#MODEL_IDS[@]} -gt 0 ]; then
+    echo -e "  ${YELLOW}⚠${NC}  Skipped (no accessible model for API key subscription)"
 else
     echo -e "  ${YELLOW}⚠${NC}  Skipped (no models available)"
 fi
