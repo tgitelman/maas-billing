@@ -14,7 +14,7 @@ todos:
   content: "TODO (deferred): File issue that HTTP+HTTPS listeners cause duplicate ActionSets leading to 403"
   status: pending
 - id: pr-envoyfilter
-  content: "PR #1035: EnvoyFilter — json_to_metadata + Lua SSE companion (supersedes #1031 Lua). Branch: feature/envoy-otel-log-jsontometa. otel_als_cluster + json_to_metadata + bodyChunks() SSE + X-MaaS headers (user_id, subscription, groups) + FILTER_STATE (key_id, organization_id) + CEL-filtered OTel ALS access log with 11 attributes."
+  content: "PR #1035: EnvoyFilter — json_to_metadata + Lua SSE companion (supersedes #1031 Lua). Branch: feature/envoy-otel-log-jsontometa. otel_als_cluster + json_to_metadata + bodyChunks() SSE + X-MaaS headers (user_id, subscription, groups) + FILTER_STATE (key_id, key_name, organization_id) + CEL-filtered OTel ALS access log with 12 attributes."
   status: pending
 - id: pr-otel-collector
   content: "PR TBD: OTel Collector CR (v1beta1) + RBAC. Branch: feature/otel-collector. Requires Red Hat build of OTel operator. memory_limiter, error_mode:ignore, sending_queue, user_id emission toggle."
@@ -31,13 +31,13 @@ isProject: false
 
 # Envoy OTel Structured Usage Logs — Implementation Record
 
-## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-06-25)
+## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-07-01)
 
-All core components deployed and verified on clusters `amit.dev.datahub.redhat.com` (ODH) and `ahadas-ahadas-rhoai.dev.datahub.redhat.com` (RHOAI). Pipeline: Envoy → OTel Collector (OpenTelemetryCollector CR) → Loki. Identity via X-MaaS headers + FILTER_STATE (key_id). Verified on both platforms.
+All core components deployed and verified on clusters `giteltal.dev.datahub.redhat.com` (ODH) and `ahadas-ahadas-rhoai.dev.datahub.redhat.com` (RHOAI). Pipeline: Envoy → OTel Collector (OpenTelemetryCollector CR) → Loki. Identity via X-MaaS headers + FILTER_STATE (key_id, key_name). Verified on both platforms.
 
-**EnvoyFilter** (`maas-model-access-logs`): Native `json_to_metadata` filter + companion Lua SSE filter. Non-streaming: `json_to_metadata` extracts model/tokens from JSON body. Streaming SSE: companion Lua filter uses `bodyChunks()` to iterate chunks without buffering, extracts tokens from the final SSE event. `INSERT_FIRST` for 429 model preservation. CEL filter for inference-only POST logging. `response_type` classification (`hit`/`rate_limit`/`error`). 11 attributes per log record.
+**EnvoyFilter** (`maas-model-access-logs`): Native `json_to_metadata` filter + companion Lua SSE filter. Non-streaming: `json_to_metadata` extracts model/tokens from JSON body. Streaming SSE: companion Lua filter uses `bodyChunks()` to iterate chunks without buffering, extracts tokens from the final SSE event. `INSERT_FIRST` for 429 model preservation. CEL filter for inference-only POST logging. `response_type` classification (`hit`/`rate_limit`/`error`). 12 attributes per log record.
 
-**OTel Collector**: `OpenTelemetryCollector` CR (v1beta1) in `opendatahub` namespace via Red Hat build of OpenTelemetry operator. Replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` → `groupbyattrs` (7 stream labels) → `batch` → Loki (`sending_queue` enabled). `user_id` sensitive data emission disabled by default (toggleable via 2-line comment swap in CR).
+**OTel Collector**: `OpenTelemetryCollector` CR (v1beta1) in `opendatahub` namespace via Red Hat build of OpenTelemetry operator. Replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` → `groupbyattrs` (8 stream labels) → `batch` → Loki (`sending_queue` enabled). `user_id` sensitive data emission disabled by default (toggleable via 2-line comment swap in CR).
 
 **Dashboards**: Two Perses dashboards in `kuadrant-system` using `response_type` stream labels for efficient querying. LokiStack patched for explicit stream label control.
 
@@ -131,7 +131,7 @@ flowchart LR
     memLimiter --> resourceProc["resource processor\n+service.name/namespace/instance.id"]
     resourceProc --> transformProc["transform\nstrip WASM quotes\n(error_mode: ignore)"]
     transformProc -.->|"optional"| redactProc["transform/redact\ndelete user_id"]
-    transformProc --> groupbyProc["groupbyattrs\npromotes: subscription, model,\nresponse_type, method,\nuser_id, key_id, organization_id"]
+    transformProc --> groupbyProc["groupbyattrs\npromotes: subscription, model,\nresponse_type, method,\nuser_id, key_id, key_name,\norganization_id"]
     redactProc -.-> groupbyProc
     groupbyProc --> batchProc["batch"]
     batchProc --> lokiGw["LokiStack Gateway\n(OTLP/HTTP + TLS + bearer\nsending_queue: 4 consumers)"]
@@ -150,24 +150,24 @@ flowchart LR
 ```
 
 - **Prometheus**: `authorized_hits`, `authorized_calls`, `limited_calls` with labels `subscription`, `model`, `organization_id`, `cost_center`
-- **Loki**: 11 attributes per inference request — `response_code`, `response_type`, `user_id`, `subscription`, `groups`, `key_id`, `organization_id`, `tokens_total`, `tokens_prompt`, `tokens_completion`, `model`
+- **Loki**: 12 attributes per inference request — `response_code`, `response_type`, `user_id`, `subscription`, `groups`, `key_id`, `key_name`, `organization_id`, `tokens_total`, `tokens_prompt`, `tokens_completion`, `model`
 
 ### Data Flow (Step by Step)
 
 1. **Client sends request** with Bearer SA token (or `sk-oai-*` API key)
 2. **`json_to_metadata`** (INSERT_FIRST) — `request_rules` extract model from JSON request body (`on_present` only — missing model simply doesn't set metadata, no "unknown" fallback).
-3. **WASM shim** calls Authorino (kubernetesTokenReview + subscription-info callout). Stores identity in `filter_state` (userid, keyId, selected_subscription, groups_str). Authorino injects `X-MaaS-*` response headers (Username, Subscription, Group). Access log uses headers for `user_id`/`subscription`/`groups`, FILTER_STATE for `key_id`/`organization_id` (no header equivalent).
+3. **WASM shim** calls Authorino (kubernetesTokenReview + subscription-info callout). Stores identity in `filter_state` (userid, keyId, keyName, selected_subscription, groups_str). Authorino injects `X-MaaS-*` response headers (Username, Subscription, Group). Access log uses headers for `user_id`/`subscription`/`groups`, FILTER_STATE for `key_id`/`key_name`/`organization_id` (no header equivalent).
 4. **WASM shim** evaluates rate limit (Limitador). On 429, sends local reply — `filter_state` is already set (`key_id` available). X-MaaS-* headers available on giteltal/ODH even on 429. Model already extracted from request body.
 5. **Request forwarded** to model server (or 429 local reply if rate limited)
 6. **Model server responds** — Non-streaming: `json_to_metadata` `response_rules` extract tokens and authoritative model from JSON body. Streaming SSE: `json_to_metadata` fires `on_error` (content-type mismatch, zero buffering), then companion Lua filter iterates `bodyChunks()` to extract tokens from the last SSE event without buffering. On 429, `on_missing` fires but model not overwritten (only `on_present` configured for response model rule).
-7. **OTel ALS** fires if CEL filter matches (POST to `/v1/chat/completions` or `/v1/completions`). Emits 11 attributes + 2 resource attributes via gRPC to OTel Collector.
-8. **OTel Collector** pipeline: memory_limiter → resource → transform (strip quotes, `error_mode: ignore`) → [optional: transform/redact (delete user_id)] → groupbyattrs (promote 7 keys to resource attributes) → batch → Loki via OTLP/HTTP (sending_queue enabled)
+7. **OTel ALS** fires if CEL filter matches (POST to `/v1/chat/completions` or `/v1/completions`). Emits 12 attributes + 2 resource attributes via gRPC to OTel Collector.
+8. **OTel Collector** pipeline: memory_limiter → resource → transform (strip quotes, `error_mode: ignore`) → [optional: transform/redact (delete user_id)] → groupbyattrs (promote 8 keys to resource attributes) → batch → Loki via OTLP/HTTP (sending_queue enabled)
 
 ### Perses Dashboard Architecture
 
 Two dashboards in `kuadrant-system` namespace:
-- **`usage-admin-loki-dashboard`** — admin view, all users, uses `loki` datasource (direct to LokiStack). Dynamic dropdowns for User, Subscription, Model via `LokiLabelValuesVariable`.
-- **`usage-user-loki-dashboard`** — per-user view, uses `scoped-loki` datasource (through loki-query-proxy). Dynamic dropdowns for Subscription, Model.
+- **`usage-admin-loki-dashboard`** — admin view, all users, uses `loki` datasource (direct to LokiStack). Dynamic dropdowns for User, Subscription, Model, Key ID via `LokiLabelValuesVariable`.
+- **`usage-user-loki-dashboard`** — per-user view, uses `scoped-loki` datasource (through loki-query-proxy). Dynamic dropdowns for Subscription, Model, Key ID.
 
 Two datasources in `kuadrant-system` namespace:
 - **`loki`** — direct to LokiStack gateway (SA token auth + kubernetesAuth + TLS)
@@ -175,10 +175,10 @@ Two datasources in `kuadrant-system` namespace:
 
 **loki-query-proxy** deployed to `kuadrant-system` namespace (default, overridable via kustomize) — Go service that intercepts Loki queries and injects `user_id="<caller>"` filter based on TokenReview of the caller's Kubernetes token.
 
-**Table panel**: Both dashboards have a "Usage breakdown" table with three Loki queries merged via `MergeSeries` transform. All table queries use `[$__range]` (negative offset removed — not supported by this Loki version):
-- **Q1**: Tokens per model/subscription — `sum by (model, subscription) (sum_over_time(... | unwrap tokens_total [$__range]))`
-- **Q2**: Successful requests per model/subscription — `sum by (model, subscription) (count_over_time(... response_type="hit" ... [$__range]))`
-- **Q3**: Rate-limited requests per model/subscription — `sum by (model, subscription) (count_over_time(... response_type="rate_limit" ... [$__range])) or (... response_type="hit" ... * 0)`. The `or (hit * 0)` zero-pads model/subscription pairs with no rate-limited traffic, ensuring Q3 returns the same label sets as Q1/Q2 (required for `MergeSeries` to join correctly — it fails when queries return different numbers of series).
+**Table panel**: Both dashboards have a "Usage breakdown" table with three Loki queries merged via `MergeSeries` transform. All table queries use `[$__range]` (negative offset removed — not supported by this Loki version). Table columns include `key_id` for per-key breakdown:
+- **Q1**: Tokens per model/subscription/key_id — `sum by (model, subscription, key_id) (sum_over_time(... | unwrap tokens_total [$__range]))`
+- **Q2**: Successful requests per model/subscription/key_id — `sum by (model, subscription, key_id) (count_over_time(... response_type="hit" ... [$__range]))`
+- **Q3**: Rate-limited requests per model/subscription/key_id — `sum by (model, subscription, key_id) (count_over_time(... response_type="rate_limit" ... [$__range])) or (... response_type="hit" ... * 0)`. The `or (hit * 0)` zero-pads model/subscription/key_id tuples with no rate-limited traffic, ensuring Q3 returns the same label sets as Q1/Q2 (required for `MergeSeries` to join correctly — it fails when queries return different numbers of series).
 
 ### Deployment Topology
 
@@ -199,7 +199,7 @@ Two datasources in `kuadrant-system` namespace:
 | `json_to_metadata` + Lua SSE companion | Native Envoy filter for JSON responses — replaced Lua after ahadas review (PR #1031). Companion Lua filter handles SSE via `bodyChunks()` (zero-buffering chunk iteration). `on_present` only for model prevents "unknown" log pollution. See "Why json_to_metadata replaced Lua" section below. |
 | CEL filter (inference-only) | Only `/v1/chat/completions` and `/v1/completions` logged. POST only. Eliminates noise from `/v1/models`, health checks, etc. |
 | `response_type` via CEL | `hit`/`rate_limit`/`error` — low cardinality stream label for Loki. Exact `response_code` still available as structured metadata. All dashboard stat/table queries use `response_type` for filtering (e.g. "Total Successful Requests" counts only `response_type="hit"`, not all requests). |
-| Identity: X-MaaS-* headers + FILTER_STATE | `user_id`, `subscription`, `groups` use `X-MaaS-*` request headers (Authorino-injected). `key_id` and `organization_id` use FILTER_STATE (no header equivalent). Headers available on 200; `-` on 429 (rate limiter fires before Authorino). FILTER_STATE survives 429. |
+| Identity: X-MaaS-* headers + FILTER_STATE | `user_id`, `subscription`, `groups` use `X-MaaS-*` request headers (Authorino-injected). `key_id`, `key_name`, and `organization_id` use FILTER_STATE (no header equivalent). Headers available on 200; `-` on 429 (rate limiter fires before Authorino). FILTER_STATE survives 429. |
 | EnvoyFilter (not Istio Telemetry CR) | Telemetry API lacks custom OTel attributes; `ConfigMap/istio` owned by ingress-operator |
 | `sed` placeholders (not `envsubst`) | Kustomize can't target YAML-in-YAML |
 | OpenTelemetryCollector CR (not raw Deployment) | Upstream alignment with Red Hat build of OTel operator. Operator manages Deployment, Service, health probes, config volume. Replaces raw ConfigMap+Deployment+Service. Requires `opentelemetry-product` operator from OperatorHub. |
@@ -223,6 +223,7 @@ Controlled by LokiStack `spec.limits.global.otlp.streamLabels.resourceAttributes
 | `method` | **Stream label** | `groupbyattrs` promoted |
 | `user_id` | **Stream label** | `groupbyattrs` promoted |
 | `key_id` | **Stream label** | `groupbyattrs` promoted |
+| `key_name` | **Stream label** | `groupbyattrs` promoted |
 | `organization_id` | **Stream label** | `groupbyattrs` promoted |
 | `kubernetes_namespace_name` | **Stream label** | OpenShift default |
 | `log_type` | **Stream label** | OpenShift default |
@@ -230,7 +231,7 @@ Controlled by LokiStack `spec.limits.global.otlp.streamLabels.resourceAttributes
 | `tokens_total`, `tokens_prompt`, `tokens_completion` | Structured metadata | Log attribute |
 | `groups` | Structured metadata | Log attribute |
 
-> **10 stream labels** (low cardinality, indexed) — enables `{response_type="rate_limit"}` as a stream selector.
+> **11 stream labels** (low cardinality, indexed) — enables `{response_type="rate_limit"}` as a stream selector.
 > **Structured metadata** queryable via pipeline filters: `| response_code="200"`, `| json | tokens_total > 100`.
 > **Dropped** (per ahadas review #1031): `request_id`, `method`, `path`, `duration_ms`, `downstream_remote_address` — operational data not needed for usage logging.
 
@@ -250,7 +251,7 @@ The monitoring-console-plugin uses prefix matching on datasource names (`OcpData
 
 | File | Change |
 | --- | --- |
-| `deployment/components/observability/otel-collector/envoy-otel-access-log.yaml` | EnvoyFilter `maas-model-access-logs`: OTel ALS cluster + `json_to_metadata` + Lua SSE companion (`bodyChunks()`) + CEL-filtered access log (11 attributes). |
+| `deployment/components/observability/otel-collector/envoy-otel-access-log.yaml` | EnvoyFilter `maas-model-access-logs`: OTel ALS cluster + `json_to_metadata` + Lua SSE companion (`bodyChunks()`) + CEL-filtered access log (12 attributes). |
 | `deployment/components/observability/otel-collector/envoy-otel-access-log-lua.yaml` | **Archived** — all-Lua implementation (2 Lua filters: `capture_model` + `extract_tokens` with SSE `bodyChunks()` support). Kept for reference. |
 | `deployment/components/observability/otel-collector/otel-collector-cr.yaml` | `OpenTelemetryCollector` CR (v1beta1) — replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` → `groupbyattrs` → `batch` → Loki. Includes `transform/redact` (toggleable user_id removal), `sending_queue`, `error_mode: ignore`. Requires Red Hat build of OTel operator. |
 | `deployment/components/observability/otel-collector/otel-collector-rbac.yaml` | SA `usage-logs-collector` + ClusterRole + ClusterRoleBinding for Loki write access (namespace: `opendatahub`) |
@@ -279,7 +280,7 @@ Four patches applied to `maas-default-gateway` via `targetRefs`:
 - Writes extracted values to dynamic metadata, overwriting `json_to_metadata`'s "0" defaults.
 - Future: `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) will replace this Lua filter with a native filter.
 
-**Patch 4 — OTel Access Log + CEL Filter**: CEL expression restricts logging to POST requests on inference paths. 11 structured attributes:
+**Patch 4 — OTel Access Log + CEL Filter**: CEL expression restricts logging to POST requests on inference paths. 12 structured attributes:
 
 | Attribute | Source | Category |
 | --- | --- | --- |
@@ -289,6 +290,7 @@ Four patches applied to `maas-default-gateway` via `targetRefs`:
 | `subscription` | `%REQ(X-MaaS-Subscription)%` | Identity |
 | `groups` | `%REQ(X-MaaS-Group)%` | Identity |
 | `key_id` | `%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%` | Identity |
+| `key_name` | `%FILTER_STATE(wasm.kuadrant.auth.identity.keyName:PLAIN)%` | Identity |
 | `organization_id` | `%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%` | Identity |
 | `tokens_total` | `%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_total)%` | Usage |
 | `tokens_prompt` | `%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_prompt)%` | Usage |
@@ -296,6 +298,8 @@ Four patches applied to `maas-default-gateway` via `targetRefs`:
 | `model` | `%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%` | Usage |
 
 Resource attributes: `service.name=maas-gateway`, `service.namespace=openshift-ingress`.
+
+**Patch 4** emits **12 structured attributes** per log record.
 
 **Attributes intentionally excluded** (present in original POC or Lua version, removed per ahadas review #1031):
 - `request_id`, `method`, `path`, `duration_ms`, `downstream_remote_address` — operational data, not needed for usage dashboards.
@@ -329,6 +333,7 @@ processors:
       - replace_pattern(attributes["user_id"], "^\"(.*)\"$$", "$$1")
       - replace_pattern(attributes["subscription"], "^\"(.*)\"$$", "$$1")
       - replace_pattern(attributes["key_id"], "^\"(.*)\"$$", "$$1")
+      - replace_pattern(attributes["key_name"], "^\"(.*)\"$$", "$$1")
       - replace_pattern(attributes["groups"], "^\"(.*)\"$$", "$$1")
       - replace_pattern(attributes["organization_id"], "^\"(.*)\"$$", "$$1")
   transform/redact:
@@ -338,7 +343,7 @@ processors:
       statements:
       - delete_key(attributes, "user_id")
   groupbyattrs:
-    keys: [subscription, model, response_type, method, user_id, key_id, organization_id]
+    keys: [subscription, model, response_type, method, user_id, key_id, key_name, organization_id]
   batch:
     timeout: 5s
     send_batch_size: 100
@@ -354,9 +359,9 @@ exporters:
 **Key configuration points**:
 - `memory_limiter` is FIRST in the pipeline — OTel Collector best practice to prevent OOM under burst traffic.
 - `error_mode: ignore` on `transform` processors — malformed attributes silently skip the statement instead of dropping the entire log record.
-- `transform` strips double-quotes from 5 identity attributes (WASM shim wraps some values in quotes).
+- `transform` strips double-quotes from 6 identity attributes (WASM shim wraps some values in quotes).
 - `user_id` emission (**disabled by default**) — `transform/redact` deletes `user_id` from log attributes before Loki. To enable emission, uncomment `delete_key` in `transform/redact` and `user_id` in `groupbyattrs.keys` (2-line toggle in CR). Dashboard variables use `customAllValue: ".*"` so `user_id=~".*"` matches all entries regardless of whether `user_id` is present — admin "All" returns correct totals.
-- `groupbyattrs` promotes 7 keys from log attributes to resource attributes — these become Loki stream labels (controlled by LokiStack `streamLabels.resourceAttributes`).
+- `groupbyattrs` promotes 8 keys from log attributes to resource attributes — these become Loki stream labels (controlled by LokiStack `streamLabels.resourceAttributes`).
 - `response_type` (not `response_code`) is a stream label — low cardinality (`hit`/`rate_limit`/`error`), enables efficient Loki filtering.
 - `sending_queue` decouples collection from export — Loki slowdowns don't backpressure the receiver.
 - Loki endpoint via `sed` placeholder at deploy time.
@@ -438,18 +443,19 @@ Go source (~160 lines, stdlib only) mounted as ConfigMap, run with `go run` on s
 
 ### json_to_metadata + SSE companion via OTel Collector CR (2026-06-24, previous)
 
-- **200 non-streaming (`hit`)**: 11 attributes populated — `model=test/e2e-distinct-model` (from response body, authoritative), `tokens_total=38`, `tokens_prompt=8`, `tokens_completion=30`, `response_type=hit`. Data flows through CR-managed collector (`usage-logs-collector` in `opendatahub`) to Loki.
+- **200 non-streaming (`hit`)**: 12 attributes populated — `model=test/e2e-distinct-model` (from response body, authoritative), `tokens_total=38`, `tokens_prompt=8`, `tokens_completion=30`, `response_type=hit`. Data flows through CR-managed collector (`usage-logs-collector` in `opendatahub`) to Loki.
 - **200 streaming SSE (`hit`)**: `model=test/e2e-distinct-model-2`, `tokens_total=76`, `tokens_prompt=8`, `tokens_completion=68` — extracted by Lua SSE companion from final SSE chunk (requires `stream_options.include_usage=true`). `preserve_existing_metadata_value: true` prevents `json_to_metadata` from overwriting Lua-set values. Stream passed through untouched.
 - **429 rate-limited (`rate_limit`)**: `model=test/e2e-distinct-model` (from request body — INSERT_FIRST runs before rate limiter). `tokens_total=0`, `tokens_prompt=0`, `tokens_completion=0`. On ODH: `user_id=kube:admin` (CEL FILTER_STATE), `key_id` populated. `subscription`/`groups` = `-` (X-MaaS headers not available on 429). On RHOAI: all identity fields `-` (platform limitation).
 
 ### X-MaaS headers + FILTER_STATE (2026-07-01, current)
 
-Identity extraction aligned with ahadas cluster: `user_id`, `subscription`, `groups` from X-MaaS-* headers (Authorino-injected). `key_id` from `%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%`. `organization_id` from `%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%` (not yet populated — AuthPolicy missing `organizationId` property).
+Identity extraction aligned with ahadas cluster: `user_id`, `subscription`, `groups` from X-MaaS-* headers (Authorino-injected). `key_id` from `%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%`. `key_name` from `%FILTER_STATE(wasm.kuadrant.auth.identity.keyName:PLAIN)%`. `organization_id` from `%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%` (not yet populated — AuthPolicy missing `organizationId` property).
 
-- **200 non-streaming (`hit`)**: `user_id=kube:admin`, `subscription=simulator-subscription`, `key_id=<uuid>` (API key), `groups=JSON array`. Tokens extracted.
+- **200 non-streaming (`hit`)**: `user_id=kube:admin`, `subscription=simulator-subscription`, `key_id=<uuid>` (API key), `key_name=<user-provided-name>`, `groups=JSON array`. Tokens extracted.
 - **200 streaming SSE (`hit`)**: Same identity. Tokens extracted by Lua SSE companion (`tokens_total=9`).
-- **429 rate-limited (`rate_limit`)**: `user_id=kube:admin` (header still available on ODH/giteltal), `subscription=simulator-subscription`, `key_id=<uuid>`. Tokens `0`.
+- **429 rate-limited (`rate_limit`)**: `user_id=kube:admin` (header still available on ODH/giteltal), `subscription=simulator-subscription`, `key_id=<uuid>`, `key_name=<user-provided-name>`. Tokens `0`.
 - **`key_id` fix**: ahadas had typo `wasm.auth.identity.keyId` (missing `kuadrant.` prefix) — never worked. Fixed to `wasm.kuadrant.auth.identity.keyId`, verified on both ahadas and giteltal.
+- **`key_name`**: User-provided API key name from `apiKeyValidation.keyName` in FILTER_STATE. Added via upstream PR #1029 (`KeyName: metadata.Name` in `ValidationResult`). Verified populated on giteltal.
 - **`organization_id`**: Shows `-`. AuthPolicy `response.success.filters.identity.json.properties` does not include `organizationId`. Requires controller change to populate.
 - **Both models**: `test/e2e-distinct-model` and `test/e2e-distinct-model-2` — both correctly extracted and visible in Loki.
 - **No "unknown" entries**: Zero "unknown" model entries in Loki. `on_present` only for model prevents log pollution.
@@ -543,8 +549,8 @@ Proxy deploys to `kuadrant-system` by default. OTel Collector CR `usage-logs` ge
 
 | PR | Branch | Status | Scope | Files | Dependencies |
 | --- | --- | --- | --- | --- | --- |
-| [#1035](https://github.com/opendatahub-io/models-as-a-service/pull/1035) EnvoyFilter | `feature/envoy-otel-log-jsontometa` | Open (draft) | `json_to_metadata` + companion Lua SSE filter. X-MaaS headers for `user_id`/`subscription`/`groups`, FILTER_STATE for `key_id`/`organization_id`. `on_present` only for model. INSERT_FIRST for 429 model preservation. 11 attributes. | 1 file, 345 lines | OTel Collector deployed on port 4317 |
-| [#1032](https://github.com/opendatahub-io/models-as-a-service/pull/1032) OTel Collector CR | `feature/otel-collector` | Open (draft) | `OpenTelemetryCollector` CR (v1beta1) + RBAC. Pipeline: `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` (user_id emission toggle) → `groupbyattrs` (7 stream labels, user_id togglable) → `batch` → Loki (`sending_queue`). | 2 files (CR + RBAC) | EnvoyFilter PR. OTel operator installed. LokiStack with streamLabels configured. |
+| [#1035](https://github.com/opendatahub-io/models-as-a-service/pull/1035) EnvoyFilter | `feature/envoy-otel-log-jsontometa` | Open (draft) | `json_to_metadata` + companion Lua SSE filter. X-MaaS headers for `user_id`/`subscription`/`groups`, FILTER_STATE for `key_id`/`key_name`/`organization_id`. `on_present` only for model. INSERT_FIRST for 429 model preservation. 12 attributes. | 1 file, 345 lines | OTel Collector deployed on port 4317 |
+| [#1032](https://github.com/opendatahub-io/models-as-a-service/pull/1032) OTel Collector CR | `feature/otel-collector` | Open (draft) | `OpenTelemetryCollector` CR (v1beta1) + RBAC. Pipeline: `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` (user_id emission toggle) → `groupbyattrs` (8 stream labels, user_id togglable) → `batch` → Loki (`sending_queue`). | 2 files (CR + RBAC) | EnvoyFilter PR. OTel operator installed. LokiStack with streamLabels configured. |
 | [#999](https://github.com/opendatahub-io/models-as-a-service/pull/999) Loki Query Proxy | `feature/loki-user-proxy` | Open | Go proxy: ConfigMap source, deployment, RBAC, service, kustomization. AllowedPaths includes label/series endpoints. `LOKI_UPSTREAM_URL` uses `__LOKI_GATEWAY_SVC__` sed placeholder. | 5 files, 672 lines | None (standalone) |
 | [#995](https://github.com/opendatahub-io/models-as-a-service/pull/995) Admin Dashboard | `feature-loki-admin-dashboard` | Open | Admin usage dashboard + `loki` datasource (direct to LokiStack). `LokiLabelValuesVariable` (COO 1.5+). `customAllValue: ".*"` for absent-label matching. `response_type` stream labels. | 3 files | LokiStack + OTel pipeline deployed. Loki infra provisioned by opendatahub-operator. |
 | [#988](https://github.com/opendatahub-io/models-as-a-service/pull/988) User Dashboard | `feature/loki-user-dashboard` | **Closed** | User-scoped dashboard + `scoped-loki` datasource (through proxy). `LokiLabelValuesVariable`. `customAllValue: ".*"`. | 3 files | Proxy PR (#999). |
@@ -553,6 +559,25 @@ Proxy deploys to `kuadrant-system` by default. OTel Collector CR `usage-logs` ge
 **Merge order**: EnvoyFilter → OTel Collector → Proxy (#999) → Admin Dashboard (#995) → User Dashboard (#988).
 
 **Note**: Admin Dashboard and Proxy are independent (no code dependency), but User Dashboard requires Proxy (datasource URL points to proxy service). All three dashboard/proxy PRs require the OTel pipeline to be deployed for Loki data to exist.
+
+### PR #1035 Review — Round 1 (2026-07-01)
+
+**Comment cleanup (resolved)**:
+
+| # | Comment | Resolution |
+| --- | --- | --- |
+| 1 | Reword "Identity — from WASM shim filter_state and Authorino-injected headers" | **Fixed.** Rephrased to "Identity — WASM shim FILTER_STATE + Authorino-injected request headers" |
+| 2 | Remove `Future: sse_to_metadata` comment | **Fixed.** Removed. |
+| 3 | Remove OTel Collector address comment | **Fixed.** Removed. |
+| 4 | Remove `Replaces both Lua filters` comment | **Fixed.** Removed. |
+
+**Open discussion — FILTER_STATE vs headers for `key_id`/`organization_id`**:
+
+ahadas proposed moving `key_id` and `organization_id` to `X-MaaS-*` headers (like `user_id`/`subscription`/`groups`). Investigation revealed:
+- `X-MaaS-KeyId` and `X-MaaS-OrganizationId` headers do NOT exist in the current `maasauthpolicy_controller.go` (never generated).
+- Historical context: `X-MaaS-Key-Id` header was deliberately removed in an earlier commit for security (defense-in-depth — keeping sensitive identity off the wire).
+- Adding these headers requires a controller code change. FILTER_STATE is the only current mechanism to access `key_id`/`key_name`/`organization_id`.
+- **Status**: Awaiting ahadas decision on whether to add these headers to the controller or keep FILTER_STATE.
 
 ### PR #995 Review — Round 1 Resolved, Round 2 Resolved (2026-06-22)
 
@@ -729,6 +754,7 @@ Verified from RHOAI collector logs (2026-06-25):
 | `user_id` | `%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%` | `kube:admin` | `-` |
 | `user_id` | `%REQ(X-MaaS-Username)%` | Available (not used) | `tgitelma@redhat.com` |
 | `key_id` | `%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%` | Works | `-` |
+| `key_name` | `%FILTER_STATE(wasm.kuadrant.auth.identity.keyName:PLAIN)%` | Works | Not tested (likely `-`) |
 | `subscription` | `%FILTER_STATE(wasm.kuadrant.auth.identity.selected_subscription:PLAIN)%` | Works | Not tested (likely `-`) |
 | `groups` | `%FILTER_STATE(wasm.kuadrant.auth.identity.groups_str:PLAIN)%` | Works | Not tested (likely `-`) |
 | `organization_id` | `%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%` | Works | Not tested (likely `-`) |
@@ -743,6 +769,7 @@ Verified from RHOAI collector logs (2026-06-25):
 | `X-MaaS-Subscription` | Yes (both) | `subscription` |
 | `X-MaaS-Group` | Yes (both) | `groups` (JSON array, not comma-separated) |
 | `X-MaaS-Key-Id` | **No header** | `key_id` — only via `filters.identity` |
+| `X-MaaS-Key-Name` | **No header** | `key_name` — only via `filters.identity` |
 | `X-MaaS-OrganizationId` | **No header** | `organization_id` — only via `filters.identity` |
 
 **What works on both platforms unchanged**: `json_to_metadata` (model/tokens), Lua SSE companion, CEL filter, `response_type` classification, OTel ALS structure, FILTER_STATE identity extraction.
@@ -757,13 +784,16 @@ Verified from RHOAI collector logs (2026-06-25):
 | `subscription` | `%REQ(X-MaaS-Subscription)%` | works | works (on giteltal ODH) |
 | `groups` | `%REQ(X-MaaS-Group)%` | works | works (on giteltal ODH) |
 | `key_id` | `%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%` | works | works |
+| `key_name` | `%FILTER_STATE(wasm.kuadrant.auth.identity.keyName:PLAIN)%` | works | works |
 | `organization_id` | `%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%` | `-` (not in AuthPolicy) | `-` |
 
 **`key_id` prefix fix**: ahadas originally had `wasm.auth.identity.keyId` (missing `kuadrant.`). Tested with API key → `-`. Patched to `wasm.kuadrant.auth.identity.keyId` → emitted correctly on both clusters.
 
+**`key_name` source**: Added to `ValidationResult` in upstream PR #1029 (`KeyName: metadata.Name`). Exposed in `auth.metadata.apiKeyValidation.keyName` → identity filter → FILTER_STATE `wasm.kuadrant.auth.identity.keyName`. User-provided API key name for human-readable identification in dashboards.
+
 **`organization_id` blocker**: The AuthPolicy's `response.success.filters.identity.json.properties` does not include an `organizationId` expression. The WASM shim only populates FILTER_STATE keys that are defined in the AuthPolicy identity filter. Adding `organizationId` requires a change to `maasauthpolicy_controller.go`.
 
-**No OTel Collector changes required** — headers and FILTER_STATE values handled directly by EnvoyFilter.
+**OTel Collector updated** — `key_name` added to `transform` quote-stripping statements and `groupbyattrs.keys` to promote it as a Loki stream label.
 
 ---
 
@@ -846,7 +876,7 @@ The final `maas-model-access-logs` EnvoyFilter consolidates the original POC (`e
 
 ### POC observability security (this work)
 
-- **No secrets logged**: `Authorization` header never captured in access logs. `sk-oai-*` API keys never appear in logs. Only `key_id` (database UUID) is logged.
+- **No secrets logged**: `Authorization` header never captured in access logs. `sk-oai-*` API keys never appear in logs. Only `key_id` (database UUID) and `key_name` (user-provided label) are logged.
 - **Identity source**: All identity attributes read from `FILTER_STATE(wasm.kuadrant.auth.identity.*)` — internal Envoy state that never touches the wire. Not spoofable by clients. Not affected by PR #912's header changes.
 - **Header spoofing**: AuthPolicy SET semantics prevent spoofing of `X-MaaS-*` headers. Filter_state not spoofable.
 - **OTel Collector**: NetworkPolicy restricts ingress to gateway pods only.
@@ -1010,7 +1040,7 @@ The final EnvoyFilter (`maas-model-access-logs`) is a hybrid combining the best 
 | Streaming safety | No (buffers SSE) | No | Yes (Lua content-type check) | **Yes (content-type mismatch → on_error)** |
 | Error safety | N/A (C++ filter) | No pcall | pcall on all body parsing | **Native — on_present only for model** |
 | "unknown" fallback | N/A | N/A | Yes (pollutes Loki) | **No — missing model omits metadata** |
-| Attributes | 25 (many redundant) | ~20 | 16 (focused) | **11 (minimal)** |
+| Attributes | 25 (many redundant) | ~20 | 16 (focused) | **12 (minimal)** |
 | Deployment | Static YAML | Go template (controller) | Static YAML | Static YAML (controller integration TODO) |
 | Identity on 429 | Yes | No (ext_authz not populated) | Yes | **Yes** |
 

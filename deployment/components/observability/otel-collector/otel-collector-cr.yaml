@@ -109,6 +109,7 @@ spec:
         - response_type
         - method
         - key_id
+        - key_name
         - organization_id
         # user_id emission disabled by default (sensitive data).
         # To enable, uncomment the line below and comment delete_key in transform/redact above.
