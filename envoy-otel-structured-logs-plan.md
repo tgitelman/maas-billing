@@ -23,8 +23,8 @@ todos:
   content: "PR 5: Dashboard migration (Perses usage dashboards with Loki LogQL, loki-query-proxy for user isolation)"
   status: pending
 - id: integrate-configreconcile
-  content: "TODO (future): Integrate headers-based-auth-policy Go template configreconcile pipeline into maas-controller — replace manual EnvoyFilter render with controller-managed lifecycle ({{.Name}}, {{.Namespace}}, {{.OTELHost}}, {{.OTELPort}} from Config CR). Currently manually rendered and deployed as static YAML."
-  status: pending
+  content: "DONE: Controller-managed EnvoyFilter lifecycle via `usageLogging` feature gate in Tenant.Spec.Telemetry. Controller reads manifest from container filesystem at runtime (/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml), templates namespace + collector address, applies via SSA with Config ownerReference. Enable/disable toggles create/delete. Verified end-to-end on cluster."
+  status: done
 isProject: false
 
 ---
@@ -34,6 +34,23 @@ isProject: false
 ## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-07-06)
 
 All core components deployed and verified on clusters `amit.dev.datahub.redhat.com` (ODH), `giteltal.dev.datahub.redhat.com` (ODH), and `ahadas-ahadas-rhoai.dev.datahub.redhat.com` (RHOAI). Pipeline: Envoy → OTel Collector (OpenTelemetryCollector CR) → Loki. All identity fields sourced from Kuadrant WASM plugin's FILTER_STATE (`wasm.kuadrant.auth.identity.*`). Verified on all platforms.
+
+### Controller Feature Gate: `usageLogging` (2026-07-06)
+
+The EnvoyFilter is now controller-managed via `Tenant.Spec.Telemetry.UsageLogging` (bool, default `false`). Implementation in `self_deployment_controller.go` (`LifecycleReconciler`):
+
+- **Enable** (`usageLogging: true`): reads EnvoyFilter YAML from container filesystem (`/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml`), templates collector address + gateway namespace, server-side applies with `Config` ownerReference and `maas-controller` fieldOwner.
+- **Disable** (`usageLogging: false` or field absent): deletes the `maas-model-access-logs` EnvoyFilter if it exists.
+- **Graceful degradation**: skips if EnvoyFilter CRD not installed, manifest file not found, or `ObservabilityManifestsPath` not configured.
+
+Pattern mirrors existing `CaptureUser` feature gate for Prometheus user labeling. RBAC marker grants `networking.istio.io/envoyfilters` verbs.
+
+Files changed:
+- `maas-controller/api/maas/v1alpha1/tenant_types.go` — added `UsageLogging *bool` to `TenantTelemetryConfig`
+- `maas-controller/pkg/controller/maas/self_deployment_controller.go` — `ensureUsageLogsEnvoyFilter`, `applyUsageLogsEnvoyFilter`, `deleteEnvoyFilterIfExists`, `isUsageLoggingEnabled`
+- `maas-controller/pkg/controller/maas/self_deployment_controller_test.go` — unit tests for all paths
+- `maas-controller/cmd/manager/main.go` — wires `ObservabilityManifestsPath: "/deployment/components/observability"`
+- Generated: `zz_generated.deepcopy.go`, CRD YAML, ClusterRole YAML
 
 **EnvoyFilter** (`maas-model-access-logs`): Native `json_to_metadata` filter + companion Lua SSE filter. Non-streaming: `json_to_metadata` extracts model/tokens from JSON body. Streaming SSE: companion Lua filter uses `bodyChunks()` to iterate chunks without buffering, extracts tokens from the final SSE event. `INSERT_FIRST` for 429 model preservation. CEL filter for inference-only POST logging. `response_type` classification (`hit`/`rate_limit`/`error`). All identity from FILTER_STATE (`wasm.kuadrant.auth.identity.*`). 12 attributes per log record.
 
