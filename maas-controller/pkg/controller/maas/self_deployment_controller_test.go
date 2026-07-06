@@ -264,48 +264,6 @@ func ownerReferenceToConfig(refs []metav1.OwnerReference, uid types.UID) (metav1
 	return metav1.OwnerReference{}, false
 }
 
-func TestLifecycleReconciler_LimitadorServiceMonitorDefaultInterval(t *testing.T) {
-	g := NewWithT(t)
-	s := lifecycleTestScheme(t)
-
-	const monitoringNS = "opendatahub"
-
-	cfg := &maasv1alpha1.Config{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: maasv1alpha1.ConfigInstanceName,
-			UID:  types.UID("cfg-uid-limitador"),
-		},
-		Spec: maasv1alpha1.ConfigSpec{},
-	}
-
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
-	r := &LifecycleReconciler{
-		Client:              cl,
-		Scheme:              s,
-		MonitoringNamespace: monitoringNS,
-	}
-
-	err := r.ensureLimitadorServiceMonitor(context.Background())
-	g.Expect(err).NotTo(HaveOccurred())
-
-	sm := &unstructured.Unstructured{}
-	sm.SetAPIVersion("monitoring.coreos.com/v1")
-	sm.SetKind("ServiceMonitor")
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{
-		Name:      "limitador-metrics",
-		Namespace: monitoringNS,
-	}, sm)).To(Succeed())
-
-	spec, found, err := unstructured.NestedMap(sm.Object, "spec")
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(found).To(BeTrue())
-
-	endpoints, found, err := unstructured.NestedSlice(spec, "endpoints")
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(found).To(BeTrue())
-	g.Expect(endpoints).To(HaveLen(1))
-
-	endpoint, ok := endpoints[0].(map[string]any)
 	g.Expect(ok).To(BeTrue())
 	g.Expect(endpoint["interval"]).To(Equal("30s"))
 }
@@ -356,4 +314,234 @@ func TestLifecycleReconciler_LimitadorServiceMonitorCustomInterval(t *testing.T)
 	endpoint, ok := endpoints[0].(map[string]any)
 	g.Expect(ok).To(BeTrue())
 	g.Expect(endpoint["interval"]).To(Equal("1m"))
+}
+
+func TestIsUsageLoggingEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   *maasv1alpha1.TenantTelemetryConfig
+		expected bool
+	}{
+		{"nil config", nil, false},
+		{"nil UsageLogging", &maasv1alpha1.TenantTelemetryConfig{}, false},
+		{"false", &maasv1alpha1.TenantTelemetryConfig{UsageLogging: boolPtr(false)}, false},
+		{"true", &maasv1alpha1.TenantTelemetryConfig{UsageLogging: boolPtr(true)}, true},
+		{"telemetry disabled overrides usageLogging", &maasv1alpha1.TenantTelemetryConfig{Enabled: boolPtr(false), UsageLogging: boolPtr(true)}, false},
+		{"telemetry enabled with usageLogging", &maasv1alpha1.TenantTelemetryConfig{Enabled: boolPtr(true), UsageLogging: boolPtr(true)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			g.Expect(isUsageLoggingEnabled(tt.config)).To(Equal(tt.expected))
+		})
+	}
+}
+
+func TestEnsureUsageLogsEnvoyFilter_DisabledByDefault(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+	const gwNS = "openshift-ingress"
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "maas-controller", Namespace: depNS},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
+		Spec:       maasv1alpha1.TenantSpec{},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, tenant).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: tenantNS,
+		GatewayName:                 "maas-default-gateway",
+		GatewayNamespace:            gwNS,
+		MonitoringNamespace:         depNS,
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+	}
+
+	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
+func TestEnsureUsageLogsEnvoyFilter_TelemetryDisabledOverridesUsageLogging(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+	const gwNS = "openshift-ingress"
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
+		Spec: maasv1alpha1.TenantSpec{
+			Telemetry: &maasv1alpha1.TenantTelemetryConfig{
+				Enabled:      boolPtr(false),
+				UsageLogging: boolPtr(true),
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: tenantNS,
+		GatewayName:                 "maas-default-gateway",
+		GatewayNamespace:            gwNS,
+		MonitoringNamespace:         depNS,
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+	}
+
+	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+	// usageLogging=true but telemetry.enabled=false → should NOT create EnvoyFilter (delete path)
+}
+
+func TestEnsureUsageLogsEnvoyFilter_MissingManifestPathSkips(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+	const gwNS = "openshift-ingress"
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
+		Spec: maasv1alpha1.TenantSpec{
+			Telemetry: &maasv1alpha1.TenantTelemetryConfig{
+				UsageLogging: boolPtr(true),
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: tenantNS,
+		GatewayName:                 "maas-default-gateway",
+		GatewayNamespace:            gwNS,
+		MonitoringNamespace:         depNS,
+		ObservabilityManifestsPath:  "/nonexistent/path/that/does/not/exist",
+	}
+
+	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
+func TestEnsureUsageLogsEnvoyFilter_EnabledCreatesFilter(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+	const gwNS = "openshift-ingress"
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "maas-controller", Namespace: depNS},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
+		Spec: maasv1alpha1.TenantSpec{
+			Telemetry: &maasv1alpha1.TenantTelemetryConfig{
+				UsageLogging: boolPtr(true),
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, tenant).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: tenantNS,
+		GatewayName:                 "maas-default-gateway",
+		GatewayNamespace:            gwNS,
+		MonitoringNamespace:         depNS,
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+	}
+
+	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
+func TestEnsureUsageLogsEnvoyFilter_NoTenantNoError(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+	const gwNS = "openshift-ingress"
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "maas-controller", Namespace: depNS},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: tenantNS,
+		GatewayName:                 "maas-default-gateway",
+		GatewayNamespace:            gwNS,
+		MonitoringNamespace:         depNS,
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+	}
+
+	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }

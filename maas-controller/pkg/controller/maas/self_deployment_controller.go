@@ -19,6 +19,8 @@ package maas
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -48,6 +51,9 @@ import (
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
+// envoyFilterRelPath is the path to the EnvoyFilter manifest relative to ObservabilityManifestsPath.
+const envoyFilterRelPath = "otel-collector/envoy-otel-access-log.yaml"
+
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
 // standalone installs do not race applying a Config manifest before the Config CRD is ready).
@@ -60,6 +66,8 @@ type LifecycleReconciler struct {
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
 	AITenantNamespace           string
+	GatewayName                 string
+	GatewayNamespace            string
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
 }
@@ -70,6 +78,7 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
+//+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -101,6 +110,9 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return *res, nil
 		}
 		if err := r.ensureObservability(ctx, log); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.ensureUsageLogsEnvoyFilter(ctx); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
@@ -449,26 +461,19 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 		return err
 	}
 
-	// Render kustomization (reuses tenant reconciler's kustomize logic)
-	// TODO: move kustomize logic to a separate package and reuse it here.
 	resources, err := tenantreconcile.RenderKustomize(r.ObservabilityManifestsPath, r.MonitoringNamespace)
 	if err != nil {
 		return fmt.Errorf("render observability dashboards: %w", err)
 	}
 
-	// Apply each resource with Config as controller owner
 	for _, resource := range resources {
-		res := resource // avoid loop variable aliasing
+		res := resource
 		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
 			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
 		}
 
 		if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
-				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
-				// installed by COO which may not be present yet). Skip so the rest of the
-				// platform manifests are applied and Tenant reconcile does not fail.
-				// The CRD watch will re-trigger reconcile once the CRDs appear.
 				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
 					"name", res.GetName(), "namespace", res.GetNamespace())
@@ -479,6 +484,133 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 	}
 
 	return nil
+}
+
+// ensureUsageLogsEnvoyFilter deploys or removes the OTel usage logs EnvoyFilter based on
+// the Tenant's usageLogging feature gate. The EnvoyFilter emits structured per-request
+// usage logs (token counts, identity, model) to an OTel Collector via gRPC Access Log Service.
+func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	tenant, err := r.getDefaultTenant(ctx)
+	if err != nil {
+		return err
+	}
+	if tenant == nil {
+		return nil
+	}
+
+	enabled := isUsageLoggingEnabled(tenant.Spec.Telemetry)
+
+	if !enabled {
+		return r.deleteEnvoyFilterIfExists(ctx, log)
+	}
+
+	return r.applyUsageLogsEnvoyFilter(ctx, log)
+}
+
+func (r *LifecycleReconciler) getDefaultTenant(ctx context.Context) (*maasv1alpha1.Tenant, error) {
+	if r.TenantSubscriptionNamespace == "" {
+		return nil, nil
+	}
+	key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: r.TenantSubscriptionNamespace}
+	var tenant maasv1alpha1.Tenant
+	if err := r.Get(ctx, key, &tenant); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &tenant, nil
+}
+
+func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger) error {
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	ef.SetName("maas-model-access-logs")
+	ef.SetNamespace(r.GatewayNamespace)
+
+	if err := r.Delete(ctx, ef); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("delete usage-logs EnvoyFilter: %w", err)
+	}
+	log.Info("deleted usage-logs EnvoyFilter (usageLogging disabled)")
+	return nil
+}
+
+func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger) error {
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	if r.ObservabilityManifestsPath == "" {
+		log.Info("ObservabilityManifestsPath not configured, skipping usage-logs EnvoyFilter")
+		return nil
+	}
+
+	manifestFile := filepath.Join(r.ObservabilityManifestsPath, envoyFilterRelPath)
+	raw, err := os.ReadFile(manifestFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestFile)
+			return nil
+		}
+		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestFile, err)
+	}
+
+	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
+
+	patched := strings.ReplaceAll(
+		string(raw),
+		"usage-logs-collector.opendatahub.svc.cluster.local",
+		collectorAddress,
+	)
+
+	ef := &unstructured.Unstructured{}
+	dec := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
+	_, _, err = dec.Decode([]byte(patched), nil, ef)
+	if err != nil {
+		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
+	}
+
+	ef.SetName("maas-model-access-logs")
+	ef.SetNamespace(r.GatewayNamespace)
+
+	if err := controllerutil.SetOwnerReference(&cfg, ef, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on EnvoyFilter: %w", err)
+	}
+
+	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
+			return nil
+		}
+		return fmt.Errorf("apply usage-logs EnvoyFilter: %w", err)
+	}
+
+	log.V(1).Info("applied usage-logs EnvoyFilter", "namespace", r.GatewayNamespace, "collector", collectorAddress)
+	return nil
+}
+
+// isUsageLoggingEnabled checks the Tenant telemetry config for the usageLogging feature gate.
+// Returns false if telemetry is globally disabled (Enabled == false) or usageLogging is not set.
+func isUsageLoggingEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
+	if t == nil {
+		return false
+	}
+	if t.Enabled != nil && !*t.Enabled {
+		return false
+	}
+	if t.UsageLogging == nil {
+		return false
+	}
+	return *t.UsageLogging
 }
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.

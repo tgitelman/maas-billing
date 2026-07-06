@@ -133,6 +133,14 @@ spec:
                           have GDPR / privacy implications — ensure compliance before use.
                         type: boolean
                     type: object
+                  usageLogging:
+                    default: false
+                    description: |-
+                      UsageLogging enables per-request structured OTel access logging
+                      for usage tracking (token counts, identity, model). When enabled, the
+                      controller deploys an EnvoyFilter on the tenant gateway that emits
+                      structured usage logs via OTel Access Log Service.
+                    type: boolean
                 type: object
             type: object
           status:
