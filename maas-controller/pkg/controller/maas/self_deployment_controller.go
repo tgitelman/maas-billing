@@ -18,7 +18,6 @@ package maas
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -34,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,11 +50,8 @@ import (
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
-// envoyFilterManifestPath is the absolute path to the EnvoyFilter manifest inside the container.
-const envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
-
-// envoyFilterName is the name of the usage-logs EnvoyFilter resource.
-const envoyFilterName = "maas-model-access-logs"
+// envoyFilterRelPath is the path to the EnvoyFilter manifest relative to ObservabilityManifestsPath.
+const envoyFilterRelPath = "otel-collector/envoy-otel-access-log.yaml"
 
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
@@ -70,10 +65,9 @@ type LifecycleReconciler struct {
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
 	AITenantNamespace           string
-	GatewayNamespace            string
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
-	EnvoyFilterManifestPath     string
+	GatewayNamespace            string
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -82,7 +76,7 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
-//+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
+//+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -114,6 +108,9 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return *res, nil
 		}
 		if err := r.ensureObservability(ctx, log); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.ensureUsageLogsEnvoyFilter(ctx); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
@@ -376,9 +373,6 @@ func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.
 	if err := r.ensureUsageDashboard(ctx, log); err != nil {
 		return err
 	}
-	if err := r.ensureUsageLogsEnvoyFilter(ctx, log); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -481,10 +475,6 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 
 		if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
-				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
-				// installed by COO which may not be present yet). Skip so the rest of the
-				// platform manifests are applied and Tenant reconcile does not fail.
-				// The CRD watch will re-trigger reconcile once the CRDs appear.
 				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
 					"name", res.GetName(), "namespace", res.GetNamespace())
@@ -498,70 +488,102 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 }
 
 // ensureUsageLogsEnvoyFilter deploys or removes the OTel usage logs EnvoyFilter based on
-// the Config's usageLogging feature gate. The EnvoyFilter emits structured per-request
+// the Tenant's usageLogging feature gate. The EnvoyFilter emits structured per-request
 // usage logs (token counts, identity, model) to an OTel Collector via gRPC Access Log Service.
-func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger) error {
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.deleteEnvoyFilterIfExists(ctx, log)
-		}
+func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	tenant, err := r.getDefaultTenant(ctx)
+	if err != nil {
 		return err
 	}
+	if tenant == nil {
+		return nil
+	}
 
-	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
+	enabled := isUsageLoggingEnabled(tenant.Spec.Telemetry)
+
+	if !enabled {
 		return r.deleteEnvoyFilterIfExists(ctx, log)
 	}
 
-	return r.applyUsageLogsEnvoyFilter(ctx, log, &cfg)
+	return r.applyUsageLogsEnvoyFilter(ctx, log)
+}
+
+func (r *LifecycleReconciler) getDefaultTenant(ctx context.Context) (*maasv1alpha1.Tenant, error) {
+	if r.TenantSubscriptionNamespace == "" {
+		return nil, nil
+	}
+	key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: r.TenantSubscriptionNamespace}
+	var tenant maasv1alpha1.Tenant
+	if err := r.Get(ctx, key, &tenant); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &tenant, nil
 }
 
 func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger) error {
 	ef := &unstructured.Unstructured{}
 	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	ef.SetName(envoyFilterName)
+	ef.SetName("maas-model-access-logs")
 	ef.SetNamespace(r.GatewayNamespace)
 
 	if err := r.Delete(ctx, ef); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
-		return fmt.Errorf("failed to delete usage-logs EnvoyFilter: %w", err)
+		return fmt.Errorf("delete usage-logs EnvoyFilter: %w", err)
 	}
 	log.Info("deleted usage-logs EnvoyFilter (usageLogging disabled)")
 	return nil
 }
 
-func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config) error {
-	manifestPath := r.EnvoyFilterManifestPath
-	if manifestPath == "" {
-		manifestPath = envoyFilterManifestPath
-	}
-	raw, err := os.ReadFile(manifestPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestPath)
+func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger) error {
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
 			return nil
 		}
-		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestPath, err)
+		return err
 	}
+
+	if r.ObservabilityManifestsPath == "" {
+		log.Info("ObservabilityManifestsPath not configured, skipping usage-logs EnvoyFilter")
+		return nil
+	}
+
+	manifestFile := filepath.Join(r.ObservabilityManifestsPath, envoyFilterRelPath)
+	raw, err := os.ReadFile(manifestFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestFile)
+			return nil
+		}
+		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestFile, err)
+	}
+
+	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
+
+	patched := strings.ReplaceAll(
+		string(raw),
+		"usage-logs-collector.opendatahub.svc.cluster.local",
+		collectorAddress,
+	)
 
 	ef := &unstructured.Unstructured{}
 	dec := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
-	_, _, err = dec.Decode(raw, nil, ef)
+	_, _, err = dec.Decode([]byte(patched), nil, ef)
 	if err != nil {
 		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
 	}
 
-	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
-	if err := patchClusterAddress(ef, collectorAddress); err != nil {
-		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
-	}
-
-	ef.SetName(envoyFilterName)
+	ef.SetName("maas-model-access-logs")
 	ef.SetNamespace(r.GatewayNamespace)
 
-	if err := controllerutil.SetOwnerReference(cfg, ef, r.Scheme); err != nil {
+	if err := controllerutil.SetOwnerReference(&cfg, ef, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on EnvoyFilter: %w", err)
 	}
 
@@ -577,62 +599,18 @@ func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log
 	return nil
 }
 
-// patchClusterAddress sets the collector address in the CLUSTER configPatch
-// (configPatches[0].patch.value.load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address.address).
-// Manual traversal is needed because unstructured.SetNestedField cannot handle
-// numeric slice indices — we must extract each []any level explicitly.
-func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
-	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
-	if err != nil {
-		return fmt.Errorf("read configPatches: %w", err)
+// isUsageLoggingEnabled checks the Tenant telemetry config for the usageLogging feature gate.
+func isUsageLoggingEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
+	if t == nil {
+		return false
 	}
-	if !found || len(configPatches) == 0 {
-		return errors.New("configPatches not found or empty")
+	if t.Enabled != nil && !*t.Enabled {
+		return false
 	}
-
-	patch, ok := configPatches[0].(map[string]any)
-	if !ok {
-		return errors.New("configPatches[0] is not an object")
+	if t.UsageLogging == nil {
+		return false
 	}
-
-	addrPath := []string{
-		"patch", "value", "load_assignment", "endpoints", "0",
-		"lb_endpoints", "0", "endpoint", "address", "socket_address", "address",
-	}
-
-	// unstructured.SetNestedField doesn't traverse numeric slice indices,
-	// so we walk manually to the socket_address map.
-	endpoints, found, err := unstructured.NestedSlice(patch, "patch", "value", "load_assignment", "endpoints")
-	if err != nil || !found || len(endpoints) == 0 {
-		return fmt.Errorf("load_assignment.endpoints not found (path: %v): %w", addrPath, err)
-	}
-	ep0, ok := endpoints[0].(map[string]any)
-	if !ok {
-		return errors.New("endpoints[0] is not an object")
-	}
-	lbEndpoints, found, err := unstructured.NestedSlice(ep0, "lb_endpoints")
-	if err != nil || !found || len(lbEndpoints) == 0 {
-		return fmt.Errorf("lb_endpoints not found: %w", err)
-	}
-	lbe0, ok := lbEndpoints[0].(map[string]any)
-	if !ok {
-		return errors.New("lb_endpoints[0] is not an object")
-	}
-
-	if err := unstructured.SetNestedField(lbe0, address,
-		"endpoint", "address", "socket_address", "address"); err != nil {
-		return fmt.Errorf("set socket_address.address: %w", err)
-	}
-
-	lbEndpoints[0] = lbe0
-	ep0["lb_endpoints"] = lbEndpoints
-	endpoints[0] = ep0
-	if err := unstructured.SetNestedSlice(patch, endpoints,
-		"patch", "value", "load_assignment", "endpoints"); err != nil {
-		return fmt.Errorf("write back endpoints: %w", err)
-	}
-	configPatches[0] = patch
-	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
+	return *t.UsageLogging
 }
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
