@@ -90,6 +90,7 @@ spec:
           - replace_pattern(attributes["user_id"], "^\"(.*)\"$$", "$$1")
           - replace_pattern(attributes["subscription"], "^\"(.*)\"$$", "$$1")
           - replace_pattern(attributes["key_id"], "^\"(.*)\"$$", "$$1")
+          - replace_pattern(attributes["key_name"], "^\"(.*)\"$$", "$$1")
           - replace_pattern(attributes["groups"], "^\"(.*)\"$$", "$$1")
           - replace_pattern(attributes["organization_id"], "^\"(.*)\"$$", "$$1")
       

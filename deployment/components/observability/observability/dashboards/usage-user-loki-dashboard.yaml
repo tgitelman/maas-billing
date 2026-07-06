@@ -59,24 +59,6 @@ spec:
               - '{service_name="maas-gateway", model!="-"}'
     - kind: ListVariable
       spec:
-        name: key_id
-        display:
-          name: "Key ID"
-        allowMultiple: true
-        allowAllValue: true
-        customAllValue: ".*"
-        defaultValue: "$__all"
-        plugin:
-          kind: LokiLabelValuesVariable
-          spec:
-            datasource:
-              kind: LokiDatasource
-              name: scoped-loki
-            labelName: key_id
-            matchers:
-              - '{service_name="maas-gateway", key_id!="-"}'
-    - kind: ListVariable
-      spec:
         name: view_by
         display:
           name: "View by"
@@ -118,7 +100,7 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum(sum_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | unwrap tokens_total [$__range]))
                     or vector(0)
 
@@ -147,7 +129,7 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     [$__range]))
                     or vector(0)
 
@@ -176,7 +158,7 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="rate_limit"}
+                    subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
                     [$__range]))
                     or vector(0)
 
@@ -204,11 +186,11 @@ spec:
                     name: scoped-loki
                   query: >-
                     (sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     [$__range]))
                     /
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id"}
+                    subscription=~"$subscription", model=~"$model"}
                     [$__range])))
                     or vector(1)
 
@@ -249,7 +231,7 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum by (${view_by:raw}) (sum_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | unwrap tokens_total [30m]))
 
     tokenConsumptionTable:
@@ -276,10 +258,6 @@ spec:
                 enableSorting: true
               - name: "subscription"
                 header: "Subscription"
-                align: "left"
-                enableSorting: true
-              - name: "key_id"
-                header: "Key ID"
                 align: "left"
                 enableSorting: true
               - name: "key_name"
@@ -318,9 +296,9 @@ spec:
                     kind: LokiDatasource
                     name: scoped-loki
                   query: >-
-                    sum by (model, subscription, key_id, key_name) (sum_over_time(
+                    sum by (model, subscription, key_name) (sum_over_time(
                     {service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | unwrap tokens_total [$__range]))
           - kind: TimeSeriesQuery
             spec:
@@ -331,9 +309,9 @@ spec:
                     kind: LokiDatasource
                     name: scoped-loki
                   query: >-
-                    sum by (model, subscription, key_id, key_name) (count_over_time(
+                    sum by (model, subscription, key_name) (count_over_time(
                     {service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     [$__range]))
           - kind: TimeSeriesQuery
             spec:
@@ -344,14 +322,14 @@ spec:
                     kind: LokiDatasource
                     name: scoped-loki
                   query: >-
-                    sum by (model, subscription, key_id, key_name) (count_over_time(
+                    sum by (model, subscription, key_name) (count_over_time(
                     {service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="rate_limit"}
+                    subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
                     [$__range]))
                     or
-                    (sum by (model, subscription, key_id, key_name) (count_over_time(
+                    (sum by (model, subscription, key_name) (count_over_time(
                     {service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", key_id=~"$key_id", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     [$__range])) * 0)
 
   layouts:
