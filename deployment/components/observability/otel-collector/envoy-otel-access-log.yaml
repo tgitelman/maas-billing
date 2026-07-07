@@ -4,11 +4,14 @@
 #
 # Identity:  All identity fields from auth identity FILTER_STATE
 #            (wasm.kuadrant.auth.identity.*), set by Kuadrant WASM plugin.
-# Model:     json_to_metadata extracts "model" from request body (covers 429),
+# Model:     Composite filter wraps json_to_metadata, executing only on
+#            inference paths (suffix match: /v1/chat/completions, /v1/completions).
+#            Extracts "model" from request body (covers 429),
 #            then overwrites from response body on 200 (authoritative).
 # Tokens:    json_to_metadata extracts usage.{total,prompt,completion}_tokens
 #            from response body (application/json only).
-# Scope:     CEL filter restricts to /v1/chat/completions and /v1/completions.
+# Scope:     Composite filter path match + CEL access log filter both restrict
+#            to inference endpoints only.
 # Targeting: Gateway API targetRefs.
 #
 # Streaming (Server-Sent Events):
@@ -59,7 +62,16 @@ spec:
                     address: usage-logs-collector.opendatahub.svc.cluster.local
                     port_value: 4317
 
-  # ── json_to_metadata: Extract model + tokens from request/response ────
+  # ── Composite filter: json_to_metadata with path-based pattern matching ────
+  #
+  # Wraps json_to_metadata inside a Composite filter that only executes on
+  # inference paths (suffix match on :path). Non-inference requests
+  # (/v1/models, /maas-api/*) skip body parsing entirely.
+  #
+  # Matches OpenAI + MaaS conventions:
+  #   - /<ns>/<model>/v1/chat/completions  (path-based routing, current)
+  #   - /<ns>/<model>/v1/completions       (legacy)
+  #   - /v1/chat/completions               (body-based routing, future)
   #
   # request_rules  — extracts "model" from the JSON request body.
   # response_rules — extracts token counts and authoritative model from the
@@ -86,78 +98,118 @@ spec:
     patch:
       operation: INSERT_FIRST
       value:
-        name: envoy.filters.http.json_to_metadata
+        name: composite
         typed_config:
-          "@type": type.googleapis.com/envoy.extensions.filters.http.json_to_metadata.v3.JsonToMetadata
-          request_rules:
-            rules:
-            - selectors:
-              - key: model
-              on_present:
-                key: model
-          response_rules:
-            rules:
-            # ── Token counts ──
-            # preserve_existing_metadata_value on on_error/on_missing:
-            # Response filters run in reverse chain order. The Lua SSE
-            # companion (later in chain) processes the response FIRST and
-            # writes real token values. json_to_metadata (first in chain)
-            # processes the response LAST — on_error fires for SSE
-            # content-type mismatch. Without preserve, it would overwrite
-            # the Lua-extracted tokens with "0".
-            - selectors:
-              - key: usage
-              - key: total_tokens
-              on_present:
-                key: tokens_total
-              on_missing:
-                key: tokens_total
-                value: "0"
-                preserve_existing_metadata_value: true
-              on_error:
-                key: tokens_total
-                value: "0"
-                preserve_existing_metadata_value: true
-            - selectors:
-              - key: usage
-              - key: prompt_tokens
-              on_present:
-                key: tokens_prompt
-              on_missing:
-                key: tokens_prompt
-                value: "0"
-                preserve_existing_metadata_value: true
-              on_error:
-                key: tokens_prompt
-                value: "0"
-                preserve_existing_metadata_value: true
-            - selectors:
-              - key: usage
-              - key: completion_tokens
-              on_present:
-                key: tokens_completion
-              on_missing:
-                key: tokens_completion
-                value: "0"
-                preserve_existing_metadata_value: true
-              on_error:
-                key: tokens_completion
-                value: "0"
-                preserve_existing_metadata_value: true
-            # ── Authoritative model from response ──
-            # On 200 JSON: overwrites the request-extracted model with the
-            # response value (authoritative, not user-spoofable).
-            # On SSE/429: no on_missing/on_error configured, so the
-            # request-extracted model stays in metadata untouched.
-            - selectors:
-              - key: model
-              on_present:
-                key: model
+          "@type": type.googleapis.com/envoy.extensions.common.matching.v3.ExtensionWithMatcher
+          extension_config:
+            name: composite
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.Composite
+          xds_matcher:
+            matcher_list:
+              matchers:
+              - predicate:
+                  or_matcher:
+                    predicate:
+                    - single_predicate:
+                        input:
+                          name: request-headers
+                          typed_config:
+                            "@type": type.googleapis.com/envoy.type.matcher.v3.HttpRequestHeaderMatchInput
+                            header_name: ":path"
+                        value_match:
+                          suffix: "/v1/chat/completions"
+                    - single_predicate:
+                        input:
+                          name: request-headers
+                          typed_config:
+                            "@type": type.googleapis.com/envoy.type.matcher.v3.HttpRequestHeaderMatchInput
+                            header_name: ":path"
+                        value_match:
+                          suffix: "/v1/completions"
+                on_match:
+                  action:
+                    name: run-json-to-metadata
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.ExecuteFilterAction
+                      typed_config:
+                        name: envoy.filters.http.json_to_metadata
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.json_to_metadata.v3.JsonToMetadata
+                          request_rules:
+                            rules:
+                            - selectors:
+                              - key: model
+                              on_present:
+                                key: model
+                          response_rules:
+                            rules:
+                            # ── Token counts ──
+                            # preserve_existing_metadata_value on on_error/on_missing:
+                            # Response filters run in reverse chain order. The Lua SSE
+                            # companion (later in chain) processes the response FIRST and
+                            # writes real token values. json_to_metadata (first in chain)
+                            # processes the response LAST — on_error fires for SSE
+                            # content-type mismatch. Without preserve, it would overwrite
+                            # the Lua-extracted tokens with "0".
+                            - selectors:
+                              - key: usage
+                              - key: total_tokens
+                              on_present:
+                                key: tokens_total
+                              on_missing:
+                                key: tokens_total
+                                value: "0"
+                                preserve_existing_metadata_value: true
+                              on_error:
+                                key: tokens_total
+                                value: "0"
+                                preserve_existing_metadata_value: true
+                            - selectors:
+                              - key: usage
+                              - key: prompt_tokens
+                              on_present:
+                                key: tokens_prompt
+                              on_missing:
+                                key: tokens_prompt
+                                value: "0"
+                                preserve_existing_metadata_value: true
+                              on_error:
+                                key: tokens_prompt
+                                value: "0"
+                                preserve_existing_metadata_value: true
+                            - selectors:
+                              - key: usage
+                              - key: completion_tokens
+                              on_present:
+                                key: tokens_completion
+                              on_missing:
+                                key: tokens_completion
+                                value: "0"
+                                preserve_existing_metadata_value: true
+                              on_error:
+                                key: tokens_completion
+                                value: "0"
+                                preserve_existing_metadata_value: true
+                            # ── Authoritative model from response ──
+                            # On 200 JSON: overwrites the request-extracted model with the
+                            # response value (authoritative, not user-spoofable).
+                            # On SSE/429: no on_missing/on_error configured, so the
+                            # request-extracted model stays in metadata untouched.
+                            - selectors:
+                              - key: model
+                              on_present:
+                                key: model
 
   # ── Lua SSE token extraction (companion to json_to_metadata) ─────────
   #
   # json_to_metadata handles application/json responses (non-streaming).
   # This Lua filter handles text/event-stream responses (streaming SSE).
+  #
+  # Requires the model server to include usage in streaming responses:
+  # either the client sends stream_options.include_usage=true, or the
+  # server is started with --enable-force-include-usage (vLLM/llm-d).
+  # Without either, tokens will be "0" per the OpenAI API spec.
   #
   # Ordering: INSERT_BEFORE router = last in request chain, FIRST in
   # response chain. This matters: Lua writes real token values to metadata

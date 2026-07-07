@@ -10,6 +10,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -400,8 +401,12 @@ func TestEnsureUsageLogsEnvoyFilter_TelemetryDisabledOverridesUsageLogging(t *te
 			},
 		},
 	}
+	existingEF := &unstructured.Unstructured{}
+	existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	existingEF.SetName("maas-model-access-logs")
+	existingEF.SetNamespace(gwNS)
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant, existingEF).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
@@ -416,7 +421,13 @@ func TestEnsureUsageLogsEnvoyFilter_TelemetryDisabledOverridesUsageLogging(t *te
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background())
 	g.Expect(err).NotTo(HaveOccurred())
-	// usageLogging=true but telemetry.enabled=false → should NOT create EnvoyFilter (delete path)
+
+	check := &unstructured.Unstructured{}
+	check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	err = cl.Get(context.Background(), client.ObjectKey{
+		Name: "maas-model-access-logs", Namespace: gwNS,
+	}, check)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when telemetry.enabled=false overrides usageLogging=true")
 }
 
 func TestEnsureUsageLogsEnvoyFilter_MissingManifestPathSkips(t *testing.T) {
@@ -501,6 +512,74 @@ func TestEnsureUsageLogsEnvoyFilter_EnabledCreatesFilter(t *testing.T) {
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background())
 	g.Expect(err).NotTo(HaveOccurred())
+
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{
+		Name: "maas-model-access-logs", Namespace: gwNS,
+	}, ef)).To(Succeed(), "EnvoyFilter should exist after enabling usageLogging")
+	g.Expect(ef.GetNamespace()).To(Equal(gwNS))
+
+	configPatches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	g.Expect(configPatches).NotTo(BeEmpty())
+	clusterPatch, _ := configPatches[0].(map[string]any)
+	endpoints, _, _ := unstructured.NestedSlice(clusterPatch, "patch", "value", "load_assignment", "endpoints")
+	g.Expect(endpoints).NotTo(BeEmpty())
+	ep0, _ := endpoints[0].(map[string]any)
+	lbEndpoints, _, _ := unstructured.NestedSlice(ep0, "lb_endpoints")
+	g.Expect(lbEndpoints).NotTo(BeEmpty())
+	lbe0, _ := lbEndpoints[0].(map[string]any)
+	addr, _, _ := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
+	g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc.cluster.local"),
+		"collector address should be patched with MonitoringNamespace")
+}
+
+func TestEnsureUsageLogsEnvoyFilter_DeletesExistingWhenDisabled(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+	const gwNS = "openshift-ingress"
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
+		Spec: maasv1alpha1.TenantSpec{
+			Telemetry: &maasv1alpha1.TenantTelemetryConfig{
+				UsageLogging: boolPtr(false),
+			},
+		},
+	}
+	existingEF := &unstructured.Unstructured{}
+	existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	existingEF.SetName("maas-model-access-logs")
+	existingEF.SetNamespace(gwNS)
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant, existingEF).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: tenantNS,
+		GatewayName:                 "maas-default-gateway",
+		GatewayNamespace:            gwNS,
+		MonitoringNamespace:         depNS,
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+	}
+
+	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	check := &unstructured.Unstructured{}
+	check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	err = cl.Get(context.Background(), client.ObjectKey{
+		Name: "maas-model-access-logs", Namespace: gwNS,
+	}, check)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
 }
 
 func TestEnsureUsageLogsEnvoyFilter_NoTenantNoError(t *testing.T) {
