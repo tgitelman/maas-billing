@@ -66,7 +66,6 @@ type LifecycleReconciler struct {
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
 	AITenantNamespace           string
-	GatewayName                 string
 	GatewayNamespace            string
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
@@ -110,9 +109,6 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return *res, nil
 		}
 		if err := r.ensureObservability(ctx, log); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.ensureUsageLogsEnvoyFilter(ctx); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
@@ -375,6 +371,9 @@ func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.
 	if err := r.ensureUsageDashboard(ctx, log); err != nil {
 		return err
 	}
+	if err := r.ensureUsageLogsEnvoyFilter(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -474,6 +473,10 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 
 		if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
+				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
+				// installed by COO which may not be present yet). Skip so the rest of the
+				// platform manifests are applied and Tenant reconcile does not fail.
+				// The CRD watch will re-trigger reconcile once the CRDs appear.
 				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
 					"name", res.GetName(), "namespace", res.GetNamespace())
@@ -487,41 +490,24 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 }
 
 // ensureUsageLogsEnvoyFilter deploys or removes the OTel usage logs EnvoyFilter based on
-// the Tenant's usageLogging feature gate. The EnvoyFilter emits structured per-request
+// the Config's usageLogging feature gate. The EnvoyFilter emits structured per-request
 // usage logs (token counts, identity, model) to an OTel Collector via gRPC Access Log Service.
 func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context) error {
 	log := ctrl.LoggerFrom(ctx)
 
-	tenant, err := r.getDefaultTenant(ctx)
-	if err != nil {
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return err
 	}
-	if tenant == nil {
-		return nil
-	}
 
-	enabled := isUsageLoggingEnabled(tenant.Spec.Telemetry)
-
-	if !enabled {
+	if !isUsageLoggingEnabled(cfg.Spec.UsageLogging) {
 		return r.deleteEnvoyFilterIfExists(ctx, log)
 	}
 
 	return r.applyUsageLogsEnvoyFilter(ctx, log)
-}
-
-func (r *LifecycleReconciler) getDefaultTenant(ctx context.Context) (*maasv1alpha1.Tenant, error) {
-	if r.TenantSubscriptionNamespace == "" {
-		return nil, nil
-	}
-	key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: r.TenantSubscriptionNamespace}
-	var tenant maasv1alpha1.Tenant
-	if err := r.Get(ctx, key, &tenant); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &tenant, nil
 }
 
 func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger) error {
@@ -554,7 +540,11 @@ func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log
 		return nil
 	}
 
-	manifestFile := filepath.Join(r.ObservabilityManifestsPath, envoyFilterRelPath)
+	// ObservabilityManifestsPath points to the dashboards kustomize root
+	// (e.g. .../observability/observability/dashboards). The EnvoyFilter manifest
+	// lives under the observability component root, two levels up.
+	observabilityRoot := filepath.Dir(filepath.Dir(r.ObservabilityManifestsPath))
+	manifestFile := filepath.Join(observabilityRoot, envoyFilterRelPath)
 	raw, err := os.ReadFile(manifestFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -651,19 +641,12 @@ func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
 }
 
-// isUsageLoggingEnabled checks the Tenant telemetry config for the usageLogging feature gate.
-// Returns false if telemetry is globally disabled (Enabled == false) or usageLogging is not set.
-func isUsageLoggingEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
-	if t == nil {
+// isUsageLoggingEnabled checks the Config spec for the usageLogging feature gate.
+func isUsageLoggingEnabled(usageLogging *bool) bool {
+	if usageLogging == nil {
 		return false
 	}
-	if t.Enabled != nil && !*t.Enabled {
-		return false
-	}
-	if t.UsageLogging == nil {
-		return false
-	}
-	return *t.UsageLogging
+	return *usageLogging
 }
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
