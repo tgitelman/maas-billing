@@ -287,7 +287,6 @@ rules:
   - networking.istio.io
   resources:
   - destinationrules
-  - envoyfilters
   verbs:
   - create
   - delete
@@ -295,6 +294,17 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - envoyfilters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
   - watch
 - apiGroups:
   - networking.istio.io

@@ -14,7 +14,7 @@ todos:
   content: "TODO (deferred): File issue that HTTP+HTTPS listeners cause duplicate ActionSets leading to 403"
   status: pending
 - id: pr-envoyfilter
-  content: "PR #1035: EnvoyFilter — json_to_metadata + Lua SSE companion (supersedes #1031 Lua). Branch: feature/envoy-otel-log-jsontometa. otel_als_cluster + json_to_metadata + bodyChunks() SSE + all identity from FILTER_STATE (wasm.kuadrant.auth.identity.*: user_id, subscription, groups, key_id, key_name, organization_id) + CEL-filtered OTel ALS access log with 12 attributes."
+  content: "PR #1035: EnvoyFilter — Composite filter wrapping json_to_metadata (path suffix match) + Lua SSE companion (supersedes #1031 Lua). Branch: feature/envoy-otel-log-jsontometa. otel_als_cluster + Composite(:path suffix → json_to_metadata) + bodyChunks() SSE + all identity from FILTER_STATE (wasm.kuadrant.auth.identity.*: user_id, subscription, groups, key_id, key_name, organization_id) + CEL-filtered OTel ALS access log with 12 attributes. Controller integration: usageLogging feature gate, patchClusterAddress, split RBAC."
   status: pending
 - id: pr-otel-collector
   content: "PR TBD: OTel Collector CR (v1beta1) + RBAC. Branch: feature/otel-collector. Requires Red Hat build of OTel operator. memory_limiter, error_mode:ignore, sending_queue, user_id emission toggle."
@@ -23,7 +23,7 @@ todos:
   content: "PR 5: Dashboard migration (Perses usage dashboards with Loki LogQL, loki-query-proxy for user isolation)"
   status: pending
 - id: integrate-configreconcile
-  content: "DONE: Controller-managed EnvoyFilter lifecycle via `usageLogging` feature gate in Tenant.Spec.Telemetry. Controller reads manifest from container filesystem at runtime (/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml), templates namespace + collector address, applies via SSA with Config ownerReference. Enable/disable toggles create/delete. Verified end-to-end on cluster."
+  content: "DONE: Controller-managed EnvoyFilter lifecycle via `usageLogging` feature gate in Tenant.Spec.Telemetry. Controller reads manifest from container filesystem at runtime (/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml), templates namespace + collector address via structured `patchClusterAddress` helper (unstructured.SetNestedField), applies via SSA with Config ownerReference. Enable/disable toggles create/delete. RBAC: split envoyfilters rule (create/get/list/watch/patch/delete — no update, relies on SSA patch). Verified end-to-end on cluster."
   status: done
 isProject: false
 
@@ -31,28 +31,31 @@ isProject: false
 
 # Envoy OTel Structured Usage Logs — Implementation Record
 
-## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-07-06)
+## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-07-07)
 
-All core components deployed and verified on clusters `amit.dev.datahub.redhat.com` (ODH), `giteltal.dev.datahub.redhat.com` (ODH), and `ahadas-ahadas-rhoai.dev.datahub.redhat.com` (RHOAI). Pipeline: Envoy → OTel Collector (OpenTelemetryCollector CR) → Loki. All identity fields sourced from Kuadrant WASM plugin's FILTER_STATE (`wasm.kuadrant.auth.identity.*`). Verified on all platforms.
+All core components deployed and verified on clusters `amit.dev.datahub.redhat.com` (ODH), `giteltal.dev.datahub.redhat.com` (ODH), and `ahadas-ahadas-rhoai.dev.datahub.redhat.com` (RHOAI). Pipeline: Envoy → OTel Collector (OpenTelemetryCollector CR) → Loki. All identity fields sourced from Kuadrant WASM plugin's FILTER_STATE (`wasm.kuadrant.auth.identity.*`). Composite filter (path-based suffix match) restricts body parsing to inference paths only. Verified on all platforms.
 
 ### Controller Feature Gate: `usageLogging` (2026-07-06)
 
 The EnvoyFilter is now controller-managed via `Tenant.Spec.Telemetry.UsageLogging` (bool, default `false`). Implementation in `self_deployment_controller.go` (`LifecycleReconciler`):
 
-- **Enable** (`usageLogging: true`): reads EnvoyFilter YAML from container filesystem (`/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml`), templates collector address + gateway namespace, server-side applies with `Config` ownerReference and `maas-controller` fieldOwner.
+- **Enable** (`usageLogging: true`): reads EnvoyFilter YAML from container filesystem (`/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml`), templates collector address via `patchClusterAddress` helper (uses `unstructured.SetNestedField` for precise YAML patching — no fragile string replacement) + gateway namespace, server-side applies with `Config` ownerReference and `maas-controller` fieldOwner.
 - **Disable** (`usageLogging: false` or field absent): deletes the `maas-model-access-logs` EnvoyFilter if it exists.
 - **Graceful degradation**: skips if EnvoyFilter CRD not installed, manifest file not found, or `ObservabilityManifestsPath` not configured.
 
 Pattern mirrors existing `CaptureUser` feature gate for Prometheus user labeling. RBAC marker grants `networking.istio.io/envoyfilters` verbs.
 
 Files changed:
-- `maas-controller/api/maas/v1alpha1/tenant_types.go` — added `UsageLogging *bool` to `TenantTelemetryConfig`
-- `maas-controller/pkg/controller/maas/self_deployment_controller.go` — `ensureUsageLogsEnvoyFilter`, `applyUsageLogsEnvoyFilter`, `deleteEnvoyFilterIfExists`, `isUsageLoggingEnabled`
-- `maas-controller/pkg/controller/maas/self_deployment_controller_test.go` — unit tests for all paths
+- `maas-controller/api/maas/v1alpha1/tenant_types.go` — added `UsageLogging *bool` to `TenantTelemetryConfig` (with GDPR warning comment)
+- `maas-controller/pkg/controller/maas/self_deployment_controller.go` — `ensureUsageLogsEnvoyFilter`, `applyUsageLogsEnvoyFilter`, `deleteEnvoyFilterIfExists`, `isUsageLoggingEnabled`, `patchClusterAddress` (unstructured nested field patching)
+- `maas-controller/pkg/controller/maas/self_deployment_controller_test.go` — unit tests for all paths (create, delete, address patching)
 - `maas-controller/cmd/manager/main.go` — wires `ObservabilityManifestsPath: "/deployment/components/observability"`
+- `deployment/base/maas-controller/rbac/clusterrole.yaml` — split `envoyfilters` into own rule, removed `update` verb
+- `deployment/components/observability/otel-collector/envoy-otel-access-log.yaml` — Composite filter wrapping `json_to_metadata` with path suffix match
+- `deployment/components/observability/observability/dashboards/loki-datasource.yaml` — fixed URL placeholder to correct FQDN
 - Generated: `zz_generated.deepcopy.go`, CRD YAML, ClusterRole YAML
 
-**EnvoyFilter** (`maas-model-access-logs`): Native `json_to_metadata` filter + companion Lua SSE filter. Non-streaming: `json_to_metadata` extracts model/tokens from JSON body. Streaming SSE: companion Lua filter uses `bodyChunks()` to iterate chunks without buffering, extracts tokens from the final SSE event. `INSERT_FIRST` for 429 model preservation. CEL filter for inference-only POST logging. `response_type` classification (`hit`/`rate_limit`/`error`). All identity from FILTER_STATE (`wasm.kuadrant.auth.identity.*`). 12 attributes per log record.
+**EnvoyFilter** (`maas-model-access-logs`): Composite filter wrapping native `json_to_metadata` with path-based suffix matching (`:path` ends with `/v1/chat/completions` or `/v1/completions`) + companion Lua SSE filter. Non-inference requests skip body parsing entirely. Non-streaming: `json_to_metadata` extracts model/tokens from JSON body. Streaming SSE: companion Lua filter uses `bodyChunks()` to iterate chunks without buffering, extracts tokens from the final SSE event (requires model server to provide `usage` in final chunk via `stream_options.include_usage=true` or `--enable-force-include-usage`). `INSERT_FIRST` for 429 model preservation. CEL filter for inference-only POST logging. `response_type` classification (`hit`/`rate_limit`/`error`). All identity from FILTER_STATE (`wasm.kuadrant.auth.identity.*`). 12 attributes per log record.
 
 **OTel Collector**: `OpenTelemetryCollector` CR (v1beta1) in `opendatahub` namespace via Red Hat build of OpenTelemetry operator. Replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` → `groupbyattrs` (8 stream labels) → `batch` → Loki (`sending_queue` enabled). `user_id` sensitive data emission disabled by default (toggleable via 2-line comment swap in CR).
 
@@ -111,7 +114,7 @@ flowchart TD
     client(["Client"]) -->|"1: HTTP request\nBearer SA token"| envoy
     subgraph envoyPod ["Envoy Pod - maas-default-gateway"]
         envoy["Envoy Proxy"]
-        j2m["json_to_metadata\n(request: model\nresponse: tokens + model)"]
+        j2m["Composite filter\n(suffix match: /v1/*/completions)\n└─ json_to_metadata\n   (request: model\n    response: tokens + model)"]
         wasmShim["WASM shim\n(auth + rate limit +\nfilter_state identity)"]
         otelALS["OTel ALS + CEL filter\n(inference-only logging)"]
         routerNode["Router"]
@@ -172,7 +175,7 @@ flowchart LR
 ### Data Flow (Step by Step)
 
 1. **Client sends request** with Bearer SA token (or `sk-oai-*` API key)
-2. **`json_to_metadata`** (INSERT_FIRST) — `request_rules` extract model from JSON request body (`on_present` only — missing model simply doesn't set metadata, no "unknown" fallback).
+2. **Composite filter (INSERT_FIRST)** — `:path` suffix matching (`/v1/chat/completions`, `/v1/completions`). If matched, `json_to_metadata` `request_rules` extract model from JSON request body (`on_present` only — missing model simply doesn't set metadata, no "unknown" fallback). Non-inference requests skip entirely.
 3. **WASM shim** calls Authorino (kubernetesTokenReview + subscription-info callout). Stores identity in `filter_state` (userid, keyId, keyName, selected_subscription, groups). Access log uses FILTER_STATE for ALL 6 identity fields (`user_id`, `subscription`, `groups`, `key_id`, `key_name`, `organization_id`). FILTER_STATE survives 429 (set before rate limit evaluation).
 4. **WASM shim** evaluates rate limit (Limitador). On 429, sends local reply — `filter_state` is already set (all identity fields available). Model already extracted from request body.
 5. **Request forwarded** to model server (or 429 local reply if rate limited)
@@ -215,7 +218,8 @@ Two datasources in `kuadrant-system` namespace:
 
 | Decision | Rationale |
 | --- | --- |
-| `json_to_metadata` + Lua SSE companion | Native Envoy filter for JSON responses — replaced Lua after ahadas review (PR #1031). Companion Lua filter handles SSE via `bodyChunks()` (zero-buffering chunk iteration). `on_present` only for model prevents "unknown" log pollution. See "Why json_to_metadata replaced Lua" section below. |
+| `json_to_metadata` + Lua SSE companion | Native Envoy filter for JSON responses — replaced Lua after ahadas review (PR #1031). Wrapped in Composite filter with `:path` suffix matching to restrict body parsing to inference paths only. Companion Lua filter handles SSE via `bodyChunks()` (zero-buffering chunk iteration). `on_present` only for model prevents "unknown" log pollution. See "Why json_to_metadata replaced Lua" section below. |
+| Composite filter (path matching) | Wraps `json_to_metadata` in `ExtensionWithMatcher` with `HttpRequestHeaderMatchInput` suffix match on `:path`. Only `/v1/chat/completions` and `/v1/completions` trigger body parsing. Eliminates unnecessary buffering of non-inference traffic (`/v1/models`, `/maas-api/*`, health checks). Resolves the "body buffering scope tradeoff" that existed with bare `json_to_metadata`. |
 | CEL filter (inference-only) | Only `/v1/chat/completions` and `/v1/completions` logged. POST only. Eliminates noise from `/v1/models`, health checks, etc. |
 | `response_type` via CEL | `hit`/`rate_limit`/`error` — low cardinality stream label for Loki. Exact `response_code` still available as structured metadata. All dashboard stat/table queries use `response_type` for filtering (e.g. "Total Successful Requests" counts only `response_type="hit"`, not all requests). |
 | Identity: All from FILTER_STATE | All 6 identity fields sourced from `%FILTER_STATE(wasm.kuadrant.auth.identity.*:PLAIN)%`. FILTER_STATE is internal Envoy state (never on wire, not spoofable, survives 429). Per ahadas review (2026-07-01): simplifies architecture, single source of truth. |
@@ -291,11 +295,12 @@ Four patches applied to `maas-default-gateway` via `targetRefs`:
 
 **Patch 1 — OTel ALS Cluster**: STRICT_DNS cluster to `usage-logs-collector.opendatahub.svc.cluster.local:4317` (gRPC/H2, 5s connect timeout).
 
-**Patch 2 — `json_to_metadata` (INSERT_FIRST)**: Native Envoy filter replacing both Lua filters. Single filter handles both request and response:
+**Patch 2 — Composite filter wrapping `json_to_metadata` (INSERT_FIRST)**: Envoy Composite filter (`ExtensionWithMatcher`) conditionally executes `json_to_metadata` only on inference paths. Uses `HttpRequestHeaderMatchInput` on `:path` with `or_matcher` for suffix matching (`/v1/chat/completions`, `/v1/completions`). Non-inference requests (`/v1/models`, `/maas-api/*`, health checks) skip body parsing entirely.
 - `request_rules`: extracts `model` from JSON request body. `on_present` only — if body has no model field or parsing fails, metadata is simply not set (no "unknown" fallback). INSERT_FIRST position ensures model extraction before rate limiter can short-circuit with 429.
 - `response_rules`: extracts `usage.{total_tokens, prompt_tokens, completion_tokens}` with `"0"` fallback (`on_missing`/`on_error`). Extracts authoritative `model` from response (`on_present` only — overwrites request-extracted model on 200 JSON; on SSE/429 the request model stays untouched).
 - **SSE pass-through**: Content-Type `text/event-stream` doesn't match `allow_content_types` (default: `application/json`), so response_rules fire `on_error` immediately — zero body buffering, tokens default to "0". The companion Lua SSE filter (Patch 3) then overwrites these with real token values.
 - **429 handling**: Error JSON body lacks usage/model, so `on_missing` fires. Tokens default to "0". Response model rule has `on_present` only, so request-extracted model is preserved.
+- **Path matching**: Suffix match covers all MaaS routing conventions — `/<ns>/<model>/v1/chat/completions` (path-based, current), `/<ns>/<model>/v1/completions` (legacy), `/v1/chat/completions` (body-based, future).
 
 **Patch 3 — Lua SSE Token Extraction (INSERT_BEFORE router)**: Companion to `json_to_metadata` for streaming SSE responses. Request phase sets `is_completions` flag on inference paths. Response phase:
 - Returns early for non-inference requests (no `is_completions` flag) and non-SSE responses (handled by `json_to_metadata`).
@@ -394,7 +399,8 @@ exporters:
 ### Final Envoy Filter Chain
 
 ```
-[0]  envoy.filters.http.json_to_metadata        (INSERT_FIRST — model from request, tokens+model from JSON response)
+[0]  composite (ExtensionWithMatcher)               (INSERT_FIRST — wraps json_to_metadata, suffix match on :path)
+       └─ json_to_metadata                          (executes only on /v1/chat/completions, /v1/completions)
 [1]  istio.metadata_exchange
 [2]  envoy.filters.http.ext_proc.bbr-pre
 [3]  kuadrant-maas-default-gateway               (WASM shim — auth + rate limit + filter_state)
@@ -414,7 +420,7 @@ Access log: `envoy.access_loggers.open_telemetry` with CEL filter on NETWORK_FIL
 
 ## Limitations
 
-1. **SSE streaming tokens**: Handled by companion Lua filter using `bodyChunks()` API. Response filters run in reverse chain order: Lua SSE (later in chain) processes the response FIRST and writes real token values, then `json_to_metadata` (first in chain) processes the response LAST. Without `preserve_existing_metadata_value: true` on `on_error`/`on_missing`, `json_to_metadata` would overwrite the Lua-extracted tokens with "0". The `preserve_existing_metadata_value` flag ensures Lua-set values survive. Stream passes through untouched to the client. Model preserved from request body. Requires `stream_options: {"include_usage": true}` on the client request for the model server to emit usage in the final SSE chunk (`llm-d-inference-sim` v0.8.2+ supports this). Future: `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) will replace the Lua companion with a native filter. **Note**: If the model server does not emit `usage` in the final SSE chunk, tokens will remain "0" — this is a model server behavior, not a filter limitation.
+1. **SSE streaming tokens**: Handled by companion Lua filter using `bodyChunks()` API. Response filters run in reverse chain order: Lua SSE (later in chain) processes the response FIRST and writes real token values, then `json_to_metadata` (first in chain) processes the response LAST. Without `preserve_existing_metadata_value: true` on `on_error`/`on_missing`, `json_to_metadata` would overwrite the Lua-extracted tokens with "0". The `preserve_existing_metadata_value` flag ensures Lua-set values survive. Stream passes through untouched to the client. Model preserved from request body. **Requires** the model server to provide `usage` in the final SSE chunk — either the client sends `stream_options: {"include_usage": true}`, or the server is started with `--enable-force-include-usage` (vLLM/llm-d). Without either, tokens will be "0" per the OpenAI API spec. Future: `sse_to_metadata` (Envoy 1.38+, not yet in OSSM) will replace the Lua companion with a native filter.
 2. **429 lack `tokens`**: Rate limiting happens before backend response → `tokens_*` = "0". Model name IS available (from request body via `json_to_metadata` INSERT_FIRST — runs before rate limiter). `response_type="rate_limit"` stream label enables dashboard filtering.
 3. **`organization_id` not yet populated**: AuthPolicy `response.success.filters.identity.json.properties` does not include `organizationId`. WASM shim only populates FILTER_STATE keys defined in the identity filter. Requires adding `organizationId` expression to `maasauthpolicy_controller.go`. Pre-wired in EnvoyFilter; will auto-populate when controller is updated.
 4. **Dual-listener 403**: HTTP+HTTPS listeners → duplicate ActionSets. Workaround: remove HTTP listener.
@@ -470,6 +476,30 @@ Go source (~160 lines, stdlib only) mounted as ConfigMap, run with `go run` on s
 - **200 non-streaming (`hit`)**: 12 attributes populated — `model=test/e2e-distinct-model` (from response body, authoritative), `tokens_total=38`, `tokens_prompt=8`, `tokens_completion=30`, `response_type=hit`. Data flows through CR-managed collector (`usage-logs-collector` in `opendatahub`) to Loki.
 - **200 streaming SSE (`hit`)**: `model=test/e2e-distinct-model-2`, `tokens_total=76`, `tokens_prompt=8`, `tokens_completion=68` — extracted by Lua SSE companion from final SSE chunk (requires `stream_options.include_usage=true`). `preserve_existing_metadata_value: true` prevents `json_to_metadata` from overwriting Lua-set values. Stream passed through untouched.
 - **429 rate-limited (`rate_limit`)**: `model=test/e2e-distinct-model` (from request body — INSERT_FIRST runs before rate limiter). `tokens_total=0`, `tokens_prompt=0`, `tokens_completion=0`. On ODH: `user_id=kube:admin` (CEL FILTER_STATE), `key_id` populated. `subscription`/`groups` = `-` (X-MaaS headers not available on 429). On RHOAI: all identity fields `-` (platform limitation).
+
+### Composite filter + Loki datasource fix (2026-07-07, current)
+
+Composite filter deployed, wrapping `json_to_metadata` with `:path` suffix matching. Non-inference requests skip body parsing. Loki datasource placeholder (`__LOKI_GATEWAY_SVC__`) fixed — dashboard queries now work.
+
+| Scenario | Code | Model | Tokens | response_type | In Loki |
+| --- | --- | --- | --- | --- | --- |
+| Normal 200 inference | 200 | facebook/opt-125m (from response) | prompt=6, completion=1, total=7 | hit | Yes |
+| Streaming WITH `include_usage` | 200 | facebook/opt-125m (from SSE chunk) | prompt=6, completion=5, total=11 | hit | Yes |
+| Streaming WITHOUT `include_usage` | 200 | facebook/opt-125m (from request) | 0/0/0 (expected — OpenAI spec) | hit | Yes |
+| 429 rate-limited (quota exhausted) | 429 | test/e2e-distinct-model (from request) | 0/0/0 | rate_limit | Yes |
+| 401 unauthorized | 401 | facebook/opt-125m (from request) | 0/0/0 | error | Yes |
+| 403 subscription mismatch | 403 | facebook/opt-125m (from request) | 0/0/0 | error | Yes |
+| Non-inference (GET /v1/models) | 200 | N/A | N/A | N/A | **NOT logged** (correct) |
+| API key auth (key_id, key_name) | 200 | test/e2e-distinct-model | extracted | hit | Yes — key_id=dc2f254c-..., key_name=verify-test-* |
+
+Infrastructure verified:
+- Composite filter accepted by Envoy (2 listeners: port 80 + 443)
+- Suffix matchers: 4 (2 per listener for chat/completions + completions)
+- Lua SSE filter present in both listeners
+- Gateway proxy errors: 0
+- Collector export errors: 0
+- Loki datasource URL: fixed (no placeholder)
+- Perses dashboard: queries return data
 
 ### All-FILTER_STATE + key_name structured metadata (2026-07-06, current)
 
@@ -585,7 +615,7 @@ Proxy deploys to `kuadrant-system` by default. OTel Collector CR `usage-logs` ge
 
 | PR | Branch | Status | Scope | Files | Dependencies |
 | --- | --- | --- | --- | --- | --- |
-| [#1035](https://github.com/opendatahub-io/models-as-a-service/pull/1035) EnvoyFilter | `feature/envoy-otel-log-jsontometa` | Open (draft) | `json_to_metadata` + companion Lua SSE filter. All identity from FILTER_STATE (`wasm.kuadrant.auth.identity.*`) — `user_id`, `subscription`, `groups`, `key_id`, `key_name`, `organization_id`. `on_present` only for model. INSERT_FIRST for 429 model preservation. 12 attributes. | 1 file, 345 lines | OTel Collector deployed on port 4317 |
+| [#1035](https://github.com/opendatahub-io/models-as-a-service/pull/1035) EnvoyFilter | `feature/envoy-otel-log-jsontometa` | Open (draft) | Composite filter wrapping `json_to_metadata` with `:path` suffix matching (inference paths only) + companion Lua SSE filter. All identity from FILTER_STATE (`wasm.kuadrant.auth.identity.*`) — `user_id`, `subscription`, `groups`, `key_id`, `key_name`, `organization_id`. `on_present` only for model. INSERT_FIRST for 429 model preservation. 12 attributes. | 1 file, ~380 lines | OTel Collector deployed on port 4317 |
 | [#1032](https://github.com/opendatahub-io/models-as-a-service/pull/1032) OTel Collector CR | `feature/otel-collector` | Open (draft) | `OpenTelemetryCollector` CR (v1beta1) + RBAC. Pipeline: `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` (user_id emission toggle) → `groupbyattrs` (8 stream labels, user_id togglable) → `batch` → Loki (`sending_queue`). | 2 files (CR + RBAC) | EnvoyFilter PR. OTel operator installed. LokiStack with streamLabels configured. |
 | [#999](https://github.com/opendatahub-io/models-as-a-service/pull/999) Loki Query Proxy | `feature/loki-user-proxy` | Open | Go proxy: ConfigMap source, deployment, RBAC, service, kustomization. AllowedPaths includes label/series endpoints. `LOKI_UPSTREAM_URL` uses `__LOKI_GATEWAY_SVC__` sed placeholder. | 5 files, 672 lines | None (standalone) |
 | [#995](https://github.com/opendatahub-io/models-as-a-service/pull/995) Admin Dashboard | `feature-loki-admin-dashboard` | Open | Admin usage dashboard + `loki` datasource (direct to LokiStack). `LokiLabelValuesVariable` (COO 1.5+). `customAllValue: ".*"` for absent-label matching. `response_type` stream labels. | 3 files | LokiStack + OTel pipeline deployed. Loki infra provisioned by opendatahub-operator. |
@@ -697,11 +727,11 @@ Lua parses JSON with regex (`string.match(raw, '"model"%s*:%s*"([^"]+)"')`). Edg
 
 ### Body buffering scope tradeoff
 
-**Lua advantage**: `capture_model` checks the request path first and returns early for non-inference paths. Only inference requests have their body buffered.
+**Lua advantage (historical)**: `capture_model` checks the request path first and returns early for non-inference paths. Only inference requests have their body buffered.
 
-**json_to_metadata**: `request_rules` apply to ALL `application/json` requests through the gateway (model discovery, API key creation, etc.). All get their body buffered and parsed.
+**json_to_metadata (previous)**: `request_rules` apply to ALL `application/json` requests through the gateway (model discovery, API key creation, etc.). All get their body buffered and parsed.
 
-**Practical impact**: Negligible. Non-inference traffic on the MaaS gateway is tiny (occasional model listing, key management). The extra parsing of small JSON payloads adds no measurable overhead. Not worth the complexity of two Lua filters and three bugs.
+**Composite filter (current — resolved)**: `json_to_metadata` wrapped inside an Envoy Composite filter with `:path` suffix matching. Only inference paths (`/v1/chat/completions`, `/v1/completions`) trigger body parsing. Non-inference traffic skips the filter entirely — zero overhead. This eliminates the body buffering scope concern that existed with bare `json_to_metadata`.
 
 ### ahadas review compliance
 
@@ -1066,18 +1096,19 @@ The final EnvoyFilter (`maas-model-access-logs`) is a hybrid combining the best 
 
 ### Three-Way Comparison
 
-| Aspect | Original POC | `headers-based-auth-policy` branch | Lua hybrid (archived) | **Final — json_to_metadata** |
+| Aspect | Original POC | `headers-based-auth-policy` branch | Lua hybrid (archived) | **Final — Composite + json_to_metadata** |
 | --- | --- | --- | --- | --- |
 | Token extraction | `json_to_metadata` (C++) | Lua (regex) | Lua (regex + pcall) | **`json_to_metadata`** (native C++) |
 | Model extraction | Response body | Request body | Request body + response overwrite | **Request body + response overwrite** |
 | Identity source | `FILTER_STATE` | `DYNAMIC_METADATA(ext_authz)` | `FILTER_STATE` | **`FILTER_STATE`** |
 | Log scope | All requests | Inference only (CEL) | Inference only (CEL) | **POST only + inference paths (CEL)** |
+| Body parsing scope | All JSON requests | Inference only (Lua path check) | Inference only (Lua path check) | **Inference only (Composite filter path match)** |
 | `response_type` | No | Yes (CEL) | Yes (CEL) | **Yes (CEL)** |
 | Streaming safety | No (buffers SSE) | No | Yes (Lua content-type check) | **Yes (content-type mismatch → on_error)** |
 | Error safety | N/A (C++ filter) | No pcall | pcall on all body parsing | **Native — on_present only for model** |
 | "unknown" fallback | N/A | N/A | Yes (pollutes Loki) | **No — missing model omits metadata** |
 | Attributes | 25 (many redundant) | ~20 | 16 (focused) | **12 (minimal)** |
-| Deployment | Static YAML | Go template (controller) | Static YAML | Static YAML (controller integration TODO) |
+| Deployment | Static YAML | Go template (controller) | Static YAML | **Controller-managed (usageLogging gate)** |
 | Identity on 429 | Yes | No (ext_authz not populated) | Yes | **Yes** |
 
 ### Security Comparison

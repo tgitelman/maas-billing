@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -565,19 +566,16 @@ func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log
 		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestFile, err)
 	}
 
-	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
-
-	patched := strings.ReplaceAll(
-		string(raw),
-		"usage-logs-collector.opendatahub.svc.cluster.local",
-		collectorAddress,
-	)
-
 	ef := &unstructured.Unstructured{}
 	dec := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
-	_, _, err = dec.Decode([]byte(patched), nil, ef)
+	_, _, err = dec.Decode(raw, nil, ef)
 	if err != nil {
 		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
+	}
+
+	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
+	if err := patchClusterAddress(ef, collectorAddress); err != nil {
+		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
 	}
 
 	ef.SetName("maas-model-access-logs")
@@ -597,6 +595,62 @@ func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log
 
 	log.V(1).Info("applied usage-logs EnvoyFilter", "namespace", r.GatewayNamespace, "collector", collectorAddress)
 	return nil
+}
+
+// patchClusterAddress sets the collector address in the CLUSTER configPatch
+// (configPatches[0].patch.value.load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address.address).
+func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read configPatches: %w", err)
+	}
+	if !found || len(configPatches) == 0 {
+		return fmt.Errorf("configPatches not found or empty")
+	}
+
+	patch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("configPatches[0] is not an object")
+	}
+
+	addrPath := []string{
+		"patch", "value", "load_assignment", "endpoints", "0",
+		"lb_endpoints", "0", "endpoint", "address", "socket_address", "address",
+	}
+
+	// unstructured.SetNestedField doesn't traverse numeric slice indices,
+	// so we walk manually to the socket_address map.
+	endpoints, found, err := unstructured.NestedSlice(patch, "patch", "value", "load_assignment", "endpoints")
+	if err != nil || !found || len(endpoints) == 0 {
+		return fmt.Errorf("load_assignment.endpoints not found (path: %v): %w", addrPath, err)
+	}
+	ep0, ok := endpoints[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("endpoints[0] is not an object")
+	}
+	lbEndpoints, found, err := unstructured.NestedSlice(ep0, "lb_endpoints")
+	if err != nil || !found || len(lbEndpoints) == 0 {
+		return fmt.Errorf("lb_endpoints not found: %w", err)
+	}
+	lbe0, ok := lbEndpoints[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("lb_endpoints[0] is not an object")
+	}
+
+	if err := unstructured.SetNestedField(lbe0, address,
+		"endpoint", "address", "socket_address", "address"); err != nil {
+		return fmt.Errorf("set socket_address.address: %w", err)
+	}
+
+	lbEndpoints[0] = lbe0
+	ep0["lb_endpoints"] = lbEndpoints
+	endpoints[0] = ep0
+	if err := unstructured.SetNestedSlice(patch, endpoints,
+		"patch", "value", "load_assignment", "endpoints"); err != nil {
+		return fmt.Errorf("write back endpoints: %w", err)
+	}
+	configPatches[0] = patch
+	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
 }
 
 // isUsageLoggingEnabled checks the Tenant telemetry config for the usageLogging feature gate.
