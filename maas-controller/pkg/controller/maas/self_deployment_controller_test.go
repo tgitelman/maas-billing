@@ -362,20 +362,17 @@ func TestLifecycleReconciler_LimitadorServiceMonitorCustomInterval(t *testing.T)
 func TestIsUsageLoggingEnabled(t *testing.T) {
 	tests := []struct {
 		name     string
-		config   *maasv1alpha1.TenantTelemetryConfig
+		value    *bool
 		expected bool
 	}{
-		{"nil config", nil, false},
-		{"nil UsageLogging", &maasv1alpha1.TenantTelemetryConfig{}, false},
-		{"false", &maasv1alpha1.TenantTelemetryConfig{UsageLogging: boolPtr(false)}, false},
-		{"true", &maasv1alpha1.TenantTelemetryConfig{UsageLogging: boolPtr(true)}, true},
-		{"telemetry disabled overrides usageLogging", &maasv1alpha1.TenantTelemetryConfig{Enabled: boolPtr(false), UsageLogging: boolPtr(true)}, false},
-		{"telemetry enabled with usageLogging", &maasv1alpha1.TenantTelemetryConfig{Enabled: boolPtr(true), UsageLogging: boolPtr(true)}, true},
+		{"nil", nil, false},
+		{"false", boolPtr(false), false},
+		{"true", boolPtr(true), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
-			g.Expect(isUsageLoggingEnabled(tt.config)).To(Equal(tt.expected))
+			g.Expect(isUsageLoggingEnabled(tt.value)).To(Equal(tt.expected))
 		})
 	}
 }
@@ -413,10 +410,9 @@ func TestEnsureUsageLogsEnvoyFilter_DisabledByDefault(t *testing.T) {
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
 		TenantSubscriptionNamespace: tenantNS,
-		GatewayName:                 "maas-default-gateway",
 		GatewayNamespace:            gwNS,
 		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background())
@@ -433,32 +429,23 @@ func TestEnsureUsageLogsEnvoyFilter_TelemetryDisabledOverridesUsageLogging(t *te
 
 	cfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-	}
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
-		Spec: maasv1alpha1.TenantSpec{
-			Telemetry: &maasv1alpha1.TenantTelemetryConfig{
-				Enabled:      boolPtr(false),
-				UsageLogging: boolPtr(true),
-			},
-		},
+		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: boolPtr(false)},
 	}
 	existingEF := &unstructured.Unstructured{}
 	existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 	existingEF.SetName("maas-model-access-logs")
 	existingEF.SetNamespace(gwNS)
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant, existingEF).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, existingEF).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
 		TenantSubscriptionNamespace: tenantNS,
-		GatewayName:                 "maas-default-gateway",
 		GatewayNamespace:            gwNS,
 		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background())
@@ -469,7 +456,7 @@ func TestEnsureUsageLogsEnvoyFilter_TelemetryDisabledOverridesUsageLogging(t *te
 	err = cl.Get(context.Background(), client.ObjectKey{
 		Name: "maas-model-access-logs", Namespace: gwNS,
 	}, check)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when telemetry.enabled=false overrides usageLogging=true")
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging=false")
 }
 
 func TestEnsureUsageLogsEnvoyFilter_MissingManifestPathSkips(t *testing.T) {
@@ -482,24 +469,16 @@ func TestEnsureUsageLogsEnvoyFilter_MissingManifestPathSkips(t *testing.T) {
 
 	cfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-	}
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
-		Spec: maasv1alpha1.TenantSpec{
-			Telemetry: &maasv1alpha1.TenantTelemetryConfig{
-				UsageLogging: boolPtr(true),
-			},
-		},
+		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: boolPtr(true)},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
 		TenantSubscriptionNamespace: tenantNS,
-		GatewayName:                 "maas-default-gateway",
 		GatewayNamespace:            gwNS,
 		MonitoringNamespace:         depNS,
 		ObservabilityManifestsPath:  "/nonexistent/path/that/does/not/exist",
@@ -529,27 +508,19 @@ func TestEnsureUsageLogsEnvoyFilter_EnabledCreatesFilter(t *testing.T) {
 	}
 	cfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-	}
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
-		Spec: maasv1alpha1.TenantSpec{
-			Telemetry: &maasv1alpha1.TenantTelemetryConfig{
-				UsageLogging: boolPtr(true),
-			},
-		},
+		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: boolPtr(true)},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, tenant).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
 		TenantSubscriptionNamespace: tenantNS,
-		GatewayName:                 "maas-default-gateway",
 		GatewayNamespace:            gwNS,
 		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background())
@@ -586,31 +557,23 @@ func TestEnsureUsageLogsEnvoyFilter_DeletesExistingWhenDisabled(t *testing.T) {
 
 	cfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-	}
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
-		Spec: maasv1alpha1.TenantSpec{
-			Telemetry: &maasv1alpha1.TenantTelemetryConfig{
-				UsageLogging: boolPtr(false),
-			},
-		},
+		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: boolPtr(false)},
 	}
 	existingEF := &unstructured.Unstructured{}
 	existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 	existingEF.SetName("maas-model-access-logs")
 	existingEF.SetNamespace(gwNS)
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant, existingEF).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, existingEF).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
 		TenantSubscriptionNamespace: tenantNS,
-		GatewayName:                 "maas-default-gateway",
 		GatewayNamespace:            gwNS,
 		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background())
@@ -624,7 +587,7 @@ func TestEnsureUsageLogsEnvoyFilter_DeletesExistingWhenDisabled(t *testing.T) {
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
 }
 
-func TestEnsureUsageLogsEnvoyFilter_NoTenantNoError(t *testing.T) {
+func TestEnsureUsageLogsEnvoyFilter_NoConfigNoError(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
 
@@ -632,31 +595,16 @@ func TestEnsureUsageLogsEnvoyFilter_NoTenantNoError(t *testing.T) {
 	const tenantNS = "models-as-a-service"
 	const gwNS = "openshift-ingress"
 
-	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "maas-controller", Namespace: depNS},
-		Spec: appsv1.DeploymentSpec{
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
-				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
-			},
-		},
-	}
-	cfg := &maasv1alpha1.Config{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-	}
-
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
 		TenantSubscriptionNamespace: tenantNS,
-		GatewayName:                 "maas-default-gateway",
 		GatewayNamespace:            gwNS,
 		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability",
+		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background())
