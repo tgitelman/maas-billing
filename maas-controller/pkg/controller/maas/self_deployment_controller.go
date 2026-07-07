@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -593,12 +594,12 @@ func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 		return fmt.Errorf("read configPatches: %w", err)
 	}
 	if !found || len(configPatches) == 0 {
-		return fmt.Errorf("configPatches not found or empty")
+		return errors.New("configPatches not found or empty")
 	}
 
 	patch, ok := configPatches[0].(map[string]any)
 	if !ok {
-		return fmt.Errorf("configPatches[0] is not an object")
+		return errors.New("configPatches[0] is not an object")
 	}
 
 	addrPath := []string{
@@ -614,7 +615,7 @@ func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 	}
 	ep0, ok := endpoints[0].(map[string]any)
 	if !ok {
-		return fmt.Errorf("endpoints[0] is not an object")
+		return errors.New("endpoints[0] is not an object")
 	}
 	lbEndpoints, found, err := unstructured.NestedSlice(ep0, "lb_endpoints")
 	if err != nil || !found || len(lbEndpoints) == 0 {
@@ -622,7 +623,7 @@ func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 	}
 	lbe0, ok := lbEndpoints[0].(map[string]any)
 	if !ok {
-		return fmt.Errorf("lb_endpoints[0] is not an object")
+		return errors.New("lb_endpoints[0] is not an object")
 	}
 
 	if err := unstructured.SetNestedField(lbe0, address,
