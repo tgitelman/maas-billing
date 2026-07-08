@@ -415,7 +415,7 @@ func TestEnsureUsageLogsEnvoyFilter_DisabledByDefault(t *testing.T) {
 		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
-	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
 }
 
@@ -448,7 +448,7 @@ func TestEnsureUsageLogsEnvoyFilter_TelemetryDisabledOverridesUsageLogging(t *te
 		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
-	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	check := &unstructured.Unstructured{}
@@ -484,7 +484,7 @@ func TestEnsureUsageLogsEnvoyFilter_MissingManifestPathSkips(t *testing.T) {
 		ObservabilityManifestsPath:  "/nonexistent/path/that/does/not/exist",
 	}
 
-	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
 }
 
@@ -523,7 +523,7 @@ func TestEnsureUsageLogsEnvoyFilter_EnabledCreatesFilter(t *testing.T) {
 		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
-	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	ef := &unstructured.Unstructured{}
@@ -576,7 +576,7 @@ func TestEnsureUsageLogsEnvoyFilter_DeletesExistingWhenDisabled(t *testing.T) {
 		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
-	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	check := &unstructured.Unstructured{}
@@ -607,7 +607,7 @@ func TestEnsureUsageLogsEnvoyFilter_NoConfigNoError(t *testing.T) {
 		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
-	err := r.ensureUsageLogsEnvoyFilter(context.Background())
+	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
 }
 

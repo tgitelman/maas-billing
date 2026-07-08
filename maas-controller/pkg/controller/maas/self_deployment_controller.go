@@ -55,6 +55,9 @@ const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 // envoyFilterRelPath is the path to the EnvoyFilter manifest relative to ObservabilityManifestsPath.
 const envoyFilterRelPath = "otel-collector/envoy-otel-access-log.yaml"
 
+// envoyFilterName is the name of the usage-logs EnvoyFilter resource.
+const envoyFilterName = "maas-model-access-logs"
+
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
 // standalone installs do not race applying a Config manifest before the Config CRD is ready).
@@ -372,7 +375,7 @@ func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.
 	if err := r.ensureUsageDashboard(ctx, log); err != nil {
 		return err
 	}
-	if err := r.ensureUsageLogsEnvoyFilter(ctx); err != nil {
+	if err := r.ensureUsageLogsEnvoyFilter(ctx, log); err != nil {
 		return err
 	}
 	return nil
@@ -491,9 +494,7 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 // ensureUsageLogsEnvoyFilter deploys or removes the OTel usage logs EnvoyFilter based on
 // the Config's usageLogging feature gate. The EnvoyFilter emits structured per-request
 // usage logs (token counts, identity, model) to an OTel Collector via gRPC Access Log Service.
-func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context) error {
-	log := ctrl.LoggerFrom(ctx)
-
+func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger) error {
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -506,13 +507,13 @@ func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context) er
 		return r.deleteEnvoyFilterIfExists(ctx, log)
 	}
 
-	return r.applyUsageLogsEnvoyFilter(ctx, log)
+	return r.applyUsageLogsEnvoyFilter(ctx, log, &cfg)
 }
 
 func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger) error {
 	ef := &unstructured.Unstructured{}
 	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	ef.SetName("maas-model-access-logs")
+	ef.SetName(envoyFilterName)
 	ef.SetNamespace(r.GatewayNamespace)
 
 	if err := r.Delete(ctx, ef); err != nil {
@@ -525,15 +526,7 @@ func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log
 	return nil
 }
 
-func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger) error {
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
+func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config) error {
 	if r.ObservabilityManifestsPath == "" {
 		log.Info("ObservabilityManifestsPath not configured, skipping usage-logs EnvoyFilter")
 		return nil
@@ -542,6 +535,7 @@ func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log
 	// ObservabilityManifestsPath points to the dashboards kustomize root
 	// (e.g. .../observability/observability/dashboards). The EnvoyFilter manifest
 	// lives under the observability component root, two levels up.
+	// TODO: introduce a dedicated ObservabilityRoot path to avoid this fragile traversal.
 	observabilityRoot := filepath.Dir(filepath.Dir(r.ObservabilityManifestsPath))
 	manifestFile := filepath.Join(observabilityRoot, envoyFilterRelPath)
 	raw, err := os.ReadFile(manifestFile)
@@ -565,10 +559,10 @@ func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log
 		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
 	}
 
-	ef.SetName("maas-model-access-logs")
+	ef.SetName(envoyFilterName)
 	ef.SetNamespace(r.GatewayNamespace)
 
-	if err := controllerutil.SetOwnerReference(&cfg, ef, r.Scheme); err != nil {
+	if err := controllerutil.SetOwnerReference(cfg, ef, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference on EnvoyFilter: %w", err)
 	}
 
@@ -586,6 +580,8 @@ func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log
 
 // patchClusterAddress sets the collector address in the CLUSTER configPatch
 // (configPatches[0].patch.value.load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address.address).
+// Manual traversal is needed because unstructured.SetNestedField cannot handle
+// numeric slice indices — we must extract each []any level explicitly.
 func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	if err != nil {
