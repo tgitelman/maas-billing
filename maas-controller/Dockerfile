@@ -11,6 +11,7 @@ ARG TARGETARCH
 
 WORKDIR /app
 COPY maas-controller/go.mod maas-controller/go.sum ./
+ENV GOTOOLCHAIN=auto
 RUN go mod download
 COPY maas-controller/ ./
 
