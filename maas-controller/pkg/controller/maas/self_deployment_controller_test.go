@@ -412,76 +412,6 @@ func TestEnsureUsageLogsEnvoyFilter_DisabledByDefault(t *testing.T) {
 		TenantSubscriptionNamespace: tenantNS,
 		GatewayNamespace:            gwNS,
 		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
-	}
-
-	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-	g.Expect(err).NotTo(HaveOccurred())
-}
-
-func TestEnsureUsageLogsEnvoyFilter_TelemetryDisabledOverridesUsageLogging(t *testing.T) {
-	g := NewWithT(t)
-	s := lifecycleTestScheme(t)
-
-	const depNS = "opendatahub"
-	const tenantNS = "models-as-a-service"
-	const gwNS = "openshift-ingress"
-
-	cfg := &maasv1alpha1.Config{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: boolPtr(false)},
-	}
-	existingEF := &unstructured.Unstructured{}
-	existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	existingEF.SetName("maas-model-access-logs")
-	existingEF.SetNamespace(gwNS)
-
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, existingEF).Build()
-	r := &LifecycleReconciler{
-		Client:                      cl,
-		Scheme:                      s,
-		DeploymentName:              "maas-controller",
-		DeploymentNS:                depNS,
-		TenantSubscriptionNamespace: tenantNS,
-		GatewayNamespace:            gwNS,
-		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
-	}
-
-	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	check := &unstructured.Unstructured{}
-	check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	err = cl.Get(context.Background(), client.ObjectKey{
-		Name: "maas-model-access-logs", Namespace: gwNS,
-	}, check)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging=false")
-}
-
-func TestEnsureUsageLogsEnvoyFilter_MissingManifestPathSkips(t *testing.T) {
-	g := NewWithT(t)
-	s := lifecycleTestScheme(t)
-
-	const depNS = "opendatahub"
-	const tenantNS = "models-as-a-service"
-	const gwNS = "openshift-ingress"
-
-	cfg := &maasv1alpha1.Config{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: boolPtr(true)},
-	}
-
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
-	r := &LifecycleReconciler{
-		Client:                      cl,
-		Scheme:                      s,
-		DeploymentName:              "maas-controller",
-		DeploymentNS:                depNS,
-		TenantSubscriptionNamespace: tenantNS,
-		GatewayNamespace:            gwNS,
-		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "/nonexistent/path/that/does/not/exist",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
@@ -511,6 +441,10 @@ func TestEnsureUsageLogsEnvoyFilter_EnabledCreatesFilter(t *testing.T) {
 		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: boolPtr(true)},
 	}
 
+	// Compute absolute path to the EnvoyFilter manifest from this test file's location.
+	_, testFile, _, _ := goruntime.Caller(0)
+	efManifest := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/otel-collector/envoy-otel-access-log.yaml")
+
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
@@ -520,7 +454,7 @@ func TestEnsureUsageLogsEnvoyFilter_EnabledCreatesFilter(t *testing.T) {
 		TenantSubscriptionNamespace: tenantNS,
 		GatewayNamespace:            gwNS,
 		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
+		EnvoyFilterManifestPath:     efManifest,
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
@@ -573,7 +507,6 @@ func TestEnsureUsageLogsEnvoyFilter_DeletesExistingWhenDisabled(t *testing.T) {
 		TenantSubscriptionNamespace: tenantNS,
 		GatewayNamespace:            gwNS,
 		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
