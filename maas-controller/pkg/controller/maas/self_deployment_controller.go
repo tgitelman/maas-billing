@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -52,8 +51,8 @@ import (
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
-// envoyFilterRelPath is the path to the EnvoyFilter manifest relative to ObservabilityManifestsPath.
-const envoyFilterRelPath = "otel-collector/envoy-otel-access-log.yaml"
+// envoyFilterManifestPath is the absolute path to the EnvoyFilter manifest inside the container.
+const envoyFilterManifestPath = "/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml"
 
 // envoyFilterName is the name of the usage-logs EnvoyFilter resource.
 const envoyFilterName = "maas-model-access-logs"
@@ -71,8 +70,10 @@ type LifecycleReconciler struct {
 	TenantSubscriptionNamespace string
 	AITenantNamespace           string
 	ObservabilityManifestsPath  string
+<<<<<<< HEAD
 	MonitoringNamespace         string
 	GatewayNamespace            string
+	EnvoyFilterManifestPath     string
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -527,24 +528,17 @@ func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log
 }
 
 func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config) error {
-	if r.ObservabilityManifestsPath == "" {
-		log.Info("ObservabilityManifestsPath not configured, skipping usage-logs EnvoyFilter")
-		return nil
+	manifestPath := r.EnvoyFilterManifestPath
+	if manifestPath == "" {
+		manifestPath = envoyFilterManifestPath
 	}
-
-	// ObservabilityManifestsPath points to the dashboards kustomize root
-	// (e.g. .../observability/observability/dashboards). The EnvoyFilter manifest
-	// lives under the observability component root, two levels up.
-	// TODO: introduce a dedicated ObservabilityRoot path to avoid this fragile traversal.
-	observabilityRoot := filepath.Dir(filepath.Dir(r.ObservabilityManifestsPath))
-	manifestFile := filepath.Join(observabilityRoot, envoyFilterRelPath)
-	raw, err := os.ReadFile(manifestFile)
+	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestFile)
+			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestPath)
 			return nil
 		}
-		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestFile, err)
+		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestPath, err)
 	}
 
 	ef := &unstructured.Unstructured{}
