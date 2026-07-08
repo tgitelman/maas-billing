@@ -521,7 +521,7 @@ func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
-		return fmt.Errorf("delete usage-logs EnvoyFilter: %w", err)
+		return fmt.Errorf("failed to delete usage-logs EnvoyFilter: %w", err)
 	}
 	log.Info("deleted usage-logs EnvoyFilter (usageLogging disabled)")
 	return nil
@@ -588,6 +588,8 @@ func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log
 
 // patchClusterAddress sets the collector address in the CLUSTER configPatch
 // (configPatches[0].patch.value.load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address.address).
+// Manual traversal is needed because unstructured.SetNestedField cannot handle
+// numeric slice indices — we must extract each []any level explicitly.
 func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	if err != nil {
