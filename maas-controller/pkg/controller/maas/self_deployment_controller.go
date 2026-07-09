@@ -52,7 +52,7 @@ import (
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
 // envoyFilterManifestPath is the absolute path to the EnvoyFilter manifest inside the container.
-const envoyFilterManifestPath = "/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml"
+const envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
 
 // envoyFilterName is the name of the usage-logs EnvoyFilter resource.
 const envoyFilterName = "maas-model-access-logs"
