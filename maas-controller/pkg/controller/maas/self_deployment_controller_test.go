@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -366,8 +367,8 @@ func TestIsUsageLoggingEnabled(t *testing.T) {
 		expected bool
 	}{
 		{"nil", nil, false},
-		{"false", boolPtr(false), false},
-		{"true", boolPtr(true), true},
+		{"false", ptr.To(false), false},
+		{"true", ptr.To(true), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -381,80 +382,55 @@ func TestEnsureUsageLogsEnvoyFilter_DisabledByDefault(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
 
-	const depNS = "opendatahub"
-	const tenantNS = "models-as-a-service"
 	const gwNS = "openshift-ingress"
 
-	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "maas-controller", Namespace: depNS},
-		Spec: appsv1.DeploymentSpec{
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
-				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
-			},
-		},
-	}
 	cfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
-		Spec:       maasv1alpha1.TenantSpec{},
-	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, tenant).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
 	r := &LifecycleReconciler{
-		Client:                      cl,
-		Scheme:                      s,
-		DeploymentName:              "maas-controller",
-		DeploymentNS:                depNS,
-		TenantSubscriptionNamespace: tenantNS,
-		GatewayNamespace:            gwNS,
-		MonitoringNamespace:         depNS,
+		Client:              cl,
+		Scheme:              s,
+		GatewayNamespace:    gwNS,
+		MonitoringNamespace: "opendatahub",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
+
+	// Verify no EnvoyFilter was created when usageLogging is not enabled
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	err = cl.Get(context.Background(), client.ObjectKey{
+		Name: envoyFilterName, Namespace: gwNS,
+	}, ef)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when usageLogging is disabled")
 }
 
 func TestEnsureUsageLogsEnvoyFilter_EnabledCreatesFilter(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
 
-	const depNS = "opendatahub"
-	const tenantNS = "models-as-a-service"
 	const gwNS = "openshift-ingress"
+	const monNS = "opendatahub"
 
-	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "maas-controller", Namespace: depNS},
-		Spec: appsv1.DeploymentSpec{
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
-				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
-			},
-		},
-	}
 	cfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: boolPtr(true)},
+		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
 	}
 
 	// Compute absolute path to the EnvoyFilter manifest from this test file's location.
 	_, testFile, _, _ := goruntime.Caller(0)
-	efManifest := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/otel-collector/envoy-otel-access-log.yaml")
+	efManifest := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs/envoy-otel-access-log.yaml")
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
 	r := &LifecycleReconciler{
-		Client:                      cl,
-		Scheme:                      s,
-		DeploymentName:              "maas-controller",
-		DeploymentNS:                depNS,
-		TenantSubscriptionNamespace: tenantNS,
-		GatewayNamespace:            gwNS,
-		MonitoringNamespace:         depNS,
-		EnvoyFilterManifestPath:     efManifest,
+		Client:                  cl,
+		Scheme:                  s,
+		GatewayNamespace:        gwNS,
+		MonitoringNamespace:     monNS,
+		EnvoyFilterManifestPath: efManifest,
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
@@ -463,7 +439,7 @@ func TestEnsureUsageLogsEnvoyFilter_EnabledCreatesFilter(t *testing.T) {
 	ef := &unstructured.Unstructured{}
 	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{
-		Name: "maas-model-access-logs", Namespace: gwNS,
+		Name: envoyFilterName, Namespace: gwNS,
 	}, ef)).To(Succeed(), "EnvoyFilter should exist after enabling usageLogging")
 	g.Expect(ef.GetNamespace()).To(Equal(gwNS))
 
@@ -485,28 +461,23 @@ func TestEnsureUsageLogsEnvoyFilter_DeletesExistingWhenDisabled(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
 
-	const depNS = "opendatahub"
-	const tenantNS = "models-as-a-service"
 	const gwNS = "openshift-ingress"
 
 	cfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: boolPtr(false)},
+		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
 	}
 	existingEF := &unstructured.Unstructured{}
 	existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	existingEF.SetName("maas-model-access-logs")
+	existingEF.SetName(envoyFilterName)
 	existingEF.SetNamespace(gwNS)
 
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, existingEF).Build()
 	r := &LifecycleReconciler{
-		Client:                      cl,
-		Scheme:                      s,
-		DeploymentName:              "maas-controller",
-		DeploymentNS:                depNS,
-		TenantSubscriptionNamespace: tenantNS,
-		GatewayNamespace:            gwNS,
-		MonitoringNamespace:         depNS,
+		Client:              cl,
+		Scheme:              s,
+		GatewayNamespace:    gwNS,
+		MonitoringNamespace: "opendatahub",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
@@ -515,35 +486,59 @@ func TestEnsureUsageLogsEnvoyFilter_DeletesExistingWhenDisabled(t *testing.T) {
 	check := &unstructured.Unstructured{}
 	check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 	err = cl.Get(context.Background(), client.ObjectKey{
-		Name: "maas-model-access-logs", Namespace: gwNS,
+		Name: envoyFilterName, Namespace: gwNS,
 	}, check)
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
 }
 
+// TestEnsureUsageLogsEnvoyFilter_NoConfigNoError verifies that when Config CR
+// does not exist, ensureUsageLogsEnvoyFilter returns nil gracefully (no error).
 func TestEnsureUsageLogsEnvoyFilter_NoConfigNoError(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
 
-	const depNS = "opendatahub"
-	const tenantNS = "models-as-a-service"
 	const gwNS = "openshift-ingress"
 
 	cl := fake.NewClientBuilder().WithScheme(s).Build()
 	r := &LifecycleReconciler{
-		Client:                      cl,
-		Scheme:                      s,
-		DeploymentName:              "maas-controller",
-		DeploymentNS:                depNS,
-		TenantSubscriptionNamespace: tenantNS,
-		GatewayNamespace:            gwNS,
-		MonitoringNamespace:         depNS,
-		ObservabilityManifestsPath:  "../../../../deployment/components/observability/observability/dashboards",
+		Client:             cl,
+		Scheme:             s,
+		GatewayNamespace:   gwNS,
+		MonitoringNamespace: "opendatahub",
 	}
 
 	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
 }
 
-func boolPtr(b bool) *bool {
-	return &b
+// TestEnsureUsageLogsEnvoyFilter_NoConfigDeletesStaleEF verifies that when Config CR
+// does not exist but a stale EnvoyFilter remains, it gets cleaned up.
+func TestEnsureUsageLogsEnvoyFilter_NoConfigDeletesStaleEF(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const gwNS = "openshift-ingress"
+
+	existingEF := &unstructured.Unstructured{}
+	existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	existingEF.SetName(envoyFilterName)
+	existingEF.SetNamespace(gwNS)
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(existingEF).Build()
+	r := &LifecycleReconciler{
+		Client:              cl,
+		Scheme:              s,
+		GatewayNamespace:    gwNS,
+		MonitoringNamespace: "opendatahub",
+	}
+
+	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	check := &unstructured.Unstructured{}
+	check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	err = cl.Get(context.Background(), client.ObjectKey{
+		Name: envoyFilterName, Namespace: gwNS,
+	}, check)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "stale EnvoyFilter should be deleted when Config is missing")
 }

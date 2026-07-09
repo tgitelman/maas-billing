@@ -52,7 +52,7 @@ import (
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
 // envoyFilterManifestPath is the absolute path to the EnvoyFilter manifest inside the container.
-const envoyFilterManifestPath = "/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml"
+const envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
 
 // envoyFilterName is the name of the usage-logs EnvoyFilter resource.
 const envoyFilterName = "maas-model-access-logs"
@@ -499,7 +499,7 @@ func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, lo
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			return r.deleteEnvoyFilterIfExists(ctx, log)
 		}
 		return err
 	}
