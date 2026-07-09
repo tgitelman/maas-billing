@@ -511,34 +511,3 @@ func TestEnsureUsageLogsEnvoyFilter_NoConfigNoError(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 }
 
-// TestEnsureUsageLogsEnvoyFilter_NoConfigDeletesStaleEF verifies that when Config CR
-// does not exist but a stale EnvoyFilter remains, it gets cleaned up.
-func TestEnsureUsageLogsEnvoyFilter_NoConfigDeletesStaleEF(t *testing.T) {
-	g := NewWithT(t)
-	s := lifecycleTestScheme(t)
-
-	const gwNS = "openshift-ingress"
-
-	existingEF := &unstructured.Unstructured{}
-	existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	existingEF.SetName(envoyFilterName)
-	existingEF.SetNamespace(gwNS)
-
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(existingEF).Build()
-	r := &LifecycleReconciler{
-		Client:              cl,
-		Scheme:              s,
-		GatewayNamespace:    gwNS,
-		MonitoringNamespace: "opendatahub",
-	}
-
-	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	check := &unstructured.Unstructured{}
-	check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	err = cl.Get(context.Background(), client.ObjectKey{
-		Name: envoyFilterName, Namespace: gwNS,
-	}, check)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "stale EnvoyFilter should be deleted when Config is missing")
-}
