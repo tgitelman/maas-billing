@@ -396,12 +396,18 @@ func TestEnsureUsageLogsEnvoyFilter_DisabledByDefault(t *testing.T) {
 		MonitoringNamespace: "opendatahub",
 	}
 
-	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	// Verify no EnvoyFilter was created when usageLogging is not enabled
+	// Precondition: no EnvoyFilter exists before execution
 	ef := &unstructured.Unstructured{}
 	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	err := cl.Get(context.Background(), client.ObjectKey{
+		Name: envoyFilterName, Namespace: gwNS,
+	}, ef)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "precondition: no EnvoyFilter should exist before test")
+
+	err = r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// Postcondition: still no EnvoyFilter
 	err = cl.Get(context.Background(), client.ObjectKey{
 		Name: envoyFilterName, Namespace: gwNS,
 	}, ef)
@@ -480,11 +486,17 @@ func TestEnsureUsageLogsEnvoyFilter_DeletesExistingWhenDisabled(t *testing.T) {
 		MonitoringNamespace: "opendatahub",
 	}
 
+	// Precondition: EnvoyFilter exists before execution
+	check := &unstructured.Unstructured{}
+	check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{
+		Name: envoyFilterName, Namespace: gwNS,
+	}, check)).To(Succeed(), "precondition: EnvoyFilter should exist before test")
+
 	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	check := &unstructured.Unstructured{}
-	check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	// Postcondition: EnvoyFilter deleted
 	err = cl.Get(context.Background(), client.ObjectKey{
 		Name: envoyFilterName, Namespace: gwNS,
 	}, check)
@@ -501,13 +513,27 @@ func TestEnsureUsageLogsEnvoyFilter_NoConfigNoError(t *testing.T) {
 
 	cl := fake.NewClientBuilder().WithScheme(s).Build()
 	r := &LifecycleReconciler{
-		Client:             cl,
-		Scheme:             s,
-		GatewayNamespace:   gwNS,
+		Client:              cl,
+		Scheme:              s,
+		GatewayNamespace:    gwNS,
 		MonitoringNamespace: "opendatahub",
 	}
 
-	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
+	// Precondition: no EnvoyFilter exists
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	err := cl.Get(context.Background(), client.ObjectKey{
+		Name: envoyFilterName, Namespace: gwNS,
+	}, ef)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "precondition: no EnvoyFilter should exist")
+
+	err = r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
 	g.Expect(err).NotTo(HaveOccurred())
+
+	// Postcondition: still no EnvoyFilter
+	err = cl.Get(context.Background(), client.ObjectKey{
+		Name: envoyFilterName, Namespace: gwNS,
+	}, ef)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when Config is missing")
 }
 
