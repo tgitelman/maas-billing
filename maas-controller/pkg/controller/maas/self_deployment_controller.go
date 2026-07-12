@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -70,7 +71,6 @@ type LifecycleReconciler struct {
 	TenantSubscriptionNamespace string
 	AITenantNamespace           string
 	ObservabilityManifestsPath  string
-<<<<<<< HEAD
 	MonitoringNamespace         string
 	GatewayNamespace            string
 	EnvoyFilterManifestPath     string
@@ -504,7 +504,7 @@ func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, lo
 		return err
 	}
 
-	if !isUsageLoggingEnabled(cfg.Spec.UsageLogging) {
+	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
 		return r.deleteEnvoyFilterIfExists(ctx, log)
 	}
 
@@ -628,14 +628,6 @@ func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 	}
 	configPatches[0] = patch
 	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
-}
-
-// isUsageLoggingEnabled checks the Config spec for the usageLogging feature gate.
-func isUsageLoggingEnabled(usageLogging *bool) bool {
-	if usageLogging == nil {
-		return false
-	}
-	return *usageLogging
 }
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.

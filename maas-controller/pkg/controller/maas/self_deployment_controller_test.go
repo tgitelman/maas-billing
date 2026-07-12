@@ -360,24 +360,6 @@ func TestLifecycleReconciler_LimitadorServiceMonitorCustomInterval(t *testing.T)
 	g.Expect(endpoint["interval"]).To(Equal("1m"))
 }
 
-func TestIsUsageLoggingEnabled(t *testing.T) {
-	tests := []struct {
-		name     string
-		value    *bool
-		expected bool
-	}{
-		{"nil", nil, false},
-		{"false", ptr.To(false), false},
-		{"true", ptr.To(true), true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-			g.Expect(isUsageLoggingEnabled(tt.value)).To(Equal(tt.expected))
-		})
-	}
-}
-
 func TestEnsureUsageLogsEnvoyFilter_DisabledByDefault(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
