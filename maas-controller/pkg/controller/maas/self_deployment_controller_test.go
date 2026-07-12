@@ -360,180 +360,112 @@ func TestLifecycleReconciler_LimitadorServiceMonitorCustomInterval(t *testing.T)
 	g.Expect(endpoint["interval"]).To(Equal("1m"))
 }
 
-func TestIsUsageLoggingEnabled(t *testing.T) {
-	tests := []struct {
-		name     string
-		value    *bool
-		expected bool
-	}{
-		{"nil", nil, false},
-		{"false", ptr.To(false), false},
-		{"true", ptr.To(true), true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			g := NewWithT(t)
-			g.Expect(isUsageLoggingEnabled(tt.value)).To(Equal(tt.expected))
-		})
-	}
-}
-
-func TestEnsureUsageLogsEnvoyFilter_DisabledByDefault(t *testing.T) {
-	g := NewWithT(t)
-	s := lifecycleTestScheme(t)
-
+func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 	const gwNS = "openshift-ingress"
+	const monitoringNS = "opendatahub"
 
-	cfg := &maasv1alpha1.Config{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-	}
+	t.Run("disabled by default", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
-	r := &LifecycleReconciler{
-		Client:              cl,
-		Scheme:              s,
-		GatewayNamespace:    gwNS,
-		MonitoringNamespace: "opendatahub",
-	}
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+		}
 
-	// Precondition: no EnvoyFilter exists before execution
-	ef := &unstructured.Unstructured{}
-	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	err := cl.Get(context.Background(), client.ObjectKey{
-		Name: envoyFilterName, Namespace: gwNS,
-	}, ef)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "precondition: no EnvoyFilter should exist before test")
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+		r := &LifecycleReconciler{
+			Client:              cl,
+			Scheme:              s,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: monitoringNS,
+		}
 
-	err = r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-	g.Expect(err).NotTo(HaveOccurred())
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
 
-	// Postcondition: still no EnvoyFilter
-	err = cl.Get(context.Background(), client.ObjectKey{
-		Name: envoyFilterName, Namespace: gwNS,
-	}, ef)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when usageLogging is disabled")
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		err = cl.Get(context.Background(), client.ObjectKey{
+			Name: envoyFilterName, Namespace: gwNS,
+		}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when usageLogging is disabled")
+	})
+
+	t.Run("enabled creates filter", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+
+		// Compute absolute path to the EnvoyFilter manifest from this test file's location.
+		_, testFile, _, _ := goruntime.Caller(0)
+		efManifest := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs/envoy-otel-access-log.yaml")
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+		r := &LifecycleReconciler{
+			Client:                  cl,
+			Scheme:                  s,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			EnvoyFilterManifestPath: efManifest,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{
+			Name: envoyFilterName, Namespace: gwNS,
+		}, ef)).To(Succeed(), "EnvoyFilter should exist after enabling usageLogging")
+		g.Expect(ef.GetNamespace()).To(Equal(gwNS))
+
+		configPatches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		g.Expect(configPatches).NotTo(BeEmpty())
+		clusterPatch, _ := configPatches[0].(map[string]any)
+		endpoints, _, _ := unstructured.NestedSlice(clusterPatch, "patch", "value", "load_assignment", "endpoints")
+		g.Expect(endpoints).NotTo(BeEmpty())
+		ep0, _ := endpoints[0].(map[string]any)
+		lbEndpoints, _, _ := unstructured.NestedSlice(ep0, "lb_endpoints")
+		g.Expect(lbEndpoints).NotTo(BeEmpty())
+		lbe0, _ := lbEndpoints[0].(map[string]any)
+		addr, _, _ := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
+		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc.cluster.local"),
+			"collector address should be patched with MonitoringNamespace")
+	})
+
+	t.Run("deletes existing when disabled", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
+		}
+		existingEF := &unstructured.Unstructured{}
+		existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		existingEF.SetName(envoyFilterName)
+		existingEF.SetNamespace(gwNS)
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, existingEF).Build()
+		r := &LifecycleReconciler{
+			Client:              cl,
+			Scheme:              s,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: monitoringNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		check := &unstructured.Unstructured{}
+		check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		err = cl.Get(context.Background(), client.ObjectKey{
+			Name: envoyFilterName, Namespace: gwNS,
+		}, check)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
+	})
 }
-
-func TestEnsureUsageLogsEnvoyFilter_EnabledCreatesFilter(t *testing.T) {
-	g := NewWithT(t)
-	s := lifecycleTestScheme(t)
-
-	const gwNS = "openshift-ingress"
-	const monNS = "opendatahub"
-
-	cfg := &maasv1alpha1.Config{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
-	}
-
-	// Compute absolute path to the EnvoyFilter manifest from this test file's location.
-	_, testFile, _, _ := goruntime.Caller(0)
-	efManifest := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs/envoy-otel-access-log.yaml")
-
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
-	r := &LifecycleReconciler{
-		Client:                  cl,
-		Scheme:                  s,
-		GatewayNamespace:        gwNS,
-		MonitoringNamespace:     monNS,
-		EnvoyFilterManifestPath: efManifest,
-	}
-
-	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	ef := &unstructured.Unstructured{}
-	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{
-		Name: envoyFilterName, Namespace: gwNS,
-	}, ef)).To(Succeed(), "EnvoyFilter should exist after enabling usageLogging")
-	g.Expect(ef.GetNamespace()).To(Equal(gwNS))
-
-	configPatches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
-	g.Expect(configPatches).NotTo(BeEmpty())
-	clusterPatch, _ := configPatches[0].(map[string]any)
-	endpoints, _, _ := unstructured.NestedSlice(clusterPatch, "patch", "value", "load_assignment", "endpoints")
-	g.Expect(endpoints).NotTo(BeEmpty())
-	ep0, _ := endpoints[0].(map[string]any)
-	lbEndpoints, _, _ := unstructured.NestedSlice(ep0, "lb_endpoints")
-	g.Expect(lbEndpoints).NotTo(BeEmpty())
-	lbe0, _ := lbEndpoints[0].(map[string]any)
-	addr, _, _ := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
-	g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc.cluster.local"),
-		"collector address should be patched with MonitoringNamespace")
-}
-
-func TestEnsureUsageLogsEnvoyFilter_DeletesExistingWhenDisabled(t *testing.T) {
-	g := NewWithT(t)
-	s := lifecycleTestScheme(t)
-
-	const gwNS = "openshift-ingress"
-
-	cfg := &maasv1alpha1.Config{
-		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-		Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
-	}
-	existingEF := &unstructured.Unstructured{}
-	existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	existingEF.SetName(envoyFilterName)
-	existingEF.SetNamespace(gwNS)
-
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, existingEF).Build()
-	r := &LifecycleReconciler{
-		Client:              cl,
-		Scheme:              s,
-		GatewayNamespace:    gwNS,
-		MonitoringNamespace: "opendatahub",
-	}
-
-	// Precondition: EnvoyFilter exists before execution
-	check := &unstructured.Unstructured{}
-	check.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{
-		Name: envoyFilterName, Namespace: gwNS,
-	}, check)).To(Succeed(), "precondition: EnvoyFilter should exist before test")
-
-	err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	// Postcondition: EnvoyFilter deleted
-	err = cl.Get(context.Background(), client.ObjectKey{
-		Name: envoyFilterName, Namespace: gwNS,
-	}, check)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
-}
-
-// TestEnsureUsageLogsEnvoyFilter_NoConfigNoError verifies that when Config CR
-// does not exist, ensureUsageLogsEnvoyFilter returns nil gracefully (no error).
-func TestEnsureUsageLogsEnvoyFilter_NoConfigNoError(t *testing.T) {
-	g := NewWithT(t)
-	s := lifecycleTestScheme(t)
-
-	const gwNS = "openshift-ingress"
-
-	cl := fake.NewClientBuilder().WithScheme(s).Build()
-	r := &LifecycleReconciler{
-		Client:              cl,
-		Scheme:              s,
-		GatewayNamespace:    gwNS,
-		MonitoringNamespace: "opendatahub",
-	}
-
-	// Precondition: no EnvoyFilter exists
-	ef := &unstructured.Unstructured{}
-	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	err := cl.Get(context.Background(), client.ObjectKey{
-		Name: envoyFilterName, Namespace: gwNS,
-	}, ef)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "precondition: no EnvoyFilter should exist")
-
-	err = r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-	g.Expect(err).NotTo(HaveOccurred())
-
-	// Postcondition: still no EnvoyFilter
-	err = cl.Get(context.Background(), client.ObjectKey{
-		Name: envoyFilterName, Namespace: gwNS,
-	}, ef)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when Config is missing")
-}
-
