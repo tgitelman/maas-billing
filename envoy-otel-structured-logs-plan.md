@@ -31,7 +31,25 @@ isProject: false
 
 # Envoy OTel Structured Usage Logs — Implementation Record
 
-## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-07-07)
+## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-07-07, updated 2026-07-13)
+
+### Upstream Alignment (2026-07-13)
+
+POC branch rebased on `upstream/main` (42 upstream commits incorporated). All upstream changes now included:
+
+| Area | Upstream change | Status |
+|------|----------------|--------|
+| **Infra namespace** (#1051, #1120) | `infra-namespace=AUTO` → `odh-ai-gateway-infra` | Included via rebase |
+| **MaasTenantConfig** (#1083) | New CRD; reconciler watches MaasTenantConfig | Included via rebase |
+| **Config CR** (#1100) | `limitadorScrapeInterval` in ConfigSpec | Merged with `usageLogging` |
+| **Monitoring namespace** (#1087) | Explicit `--monitoring-namespace` flag (default `opendatahub`) | Included via rebase |
+| **Container hardening** (#1138) | `readOnlyRootFilesystem`, `seccompProfile` | Included via rebase |
+| **Privacy** (#1133, #1114) | Hash/redact username, sensitive headers | Included via rebase |
+| **EnvoyFilter layout** (#1096) | 8-patch payload-processing in params.go | Included via rebase |
+
+### Dashboard fix (2026-07-13)
+
+Active Users panel: added `| user_id!="-"` to exclude Envoy dash sentinel from distinct user count. Verified against Loki — without filter: 3 users (includes `"-"`), with filter: 2 users (correct). Fix applied to `usage-admin-loki-dashboard.yaml` on POC branch and pending on PR #995 branch.
 
 All core components deployed and verified on clusters `amit.dev.datahub.redhat.com` (ODH), `giteltal.dev.datahub.redhat.com` (ODH), and `ahadas-ahadas-rhoai.dev.datahub.redhat.com` (RHOAI). Pipeline: Envoy → OTel Collector (OpenTelemetryCollector CR) → Loki. All identity fields sourced from Kuadrant WASM plugin's FILTER_STATE (`wasm.kuadrant.auth.identity.*`). Composite filter (path-based suffix match) restricts body parsing to inference paths only. Verified on all platforms.
 
@@ -39,7 +57,7 @@ All core components deployed and verified on clusters `amit.dev.datahub.redhat.c
 
 The EnvoyFilter is now controller-managed via `Config.Spec.UsageLogging` (bool, default `false`). Cluster-wide toggle on the singleton `Config/default` CR. Implementation in `self_deployment_controller.go` (`LifecycleReconciler.ensureObservability` → `ensureUsageLogsEnvoyFilter`):
 
-- **Enable** (`usageLogging: true`): reads EnvoyFilter YAML from container filesystem (`/deployment/components/observability/otel-collector/envoy-otel-access-log.yaml`), templates collector address via `patchClusterAddress` helper (uses `unstructured.SetNestedField` for precise YAML patching — no fragile string replacement) + gateway namespace, server-side applies with `Config` ownerReference and `maas-controller` fieldOwner.
+- **Enable** (`usageLogging: true`): reads EnvoyFilter YAML from container filesystem (`/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml`), templates collector address via `patchClusterAddress` helper (uses `unstructured.SetNestedField` for precise YAML patching — no fragile string replacement) + gateway namespace, server-side applies with `Config` ownerReference and `maas-controller` fieldOwner.
 - **Disable** (`usageLogging: false` or field absent): deletes the `maas-model-access-logs` EnvoyFilter if it exists.
 - **Graceful degradation**: skips if EnvoyFilter CRD not installed, manifest file not found, or `ObservabilityManifestsPath` not configured.
 
@@ -47,11 +65,11 @@ Pattern mirrors existing observability toggles (cluster-wide scope — EnvoyFilt
 
 Files changed:
 - `maas-controller/api/maas/v1alpha1/config_types.go` — added `UsageLogging *bool` to `ConfigSpec` (with GDPR warning comment)
-- `maas-controller/pkg/controller/maas/self_deployment_controller.go` — `ensureUsageLogsEnvoyFilter`, `applyUsageLogsEnvoyFilter`, `deleteEnvoyFilterIfExists`, `isUsageLoggingEnabled`, `patchClusterAddress` (unstructured nested field patching), integrated into `ensureObservability`
+- `maas-controller/pkg/controller/maas/self_deployment_controller.go` — `ensureUsageLogsEnvoyFilter`, `applyUsageLogsEnvoyFilter`, `deleteEnvoyFilterIfExists`, `patchClusterAddress` (unstructured nested field patching), integrated into `ensureObservability`
 - `maas-controller/pkg/controller/maas/self_deployment_controller_test.go` — unit tests for all paths (create, delete, address patching, Config CR lookup)
 - `maas-controller/cmd/manager/main.go` — wires `GatewayNamespace`
 - `deployment/base/maas-controller/crd/bases/maas.opendatahub.io_configs.yaml` — added `usageLogging` field
-- `deployment/components/observability/otel-collector/envoy-otel-access-log.yaml` — Composite filter wrapping `json_to_metadata` with path suffix match
+- `deployment/components/observability/usage-logs/envoy-otel-access-log.yaml` — Composite filter wrapping `json_to_metadata` with path suffix match
 - Generated: `zz_generated.deepcopy.go`
 
 **EnvoyFilter** (`maas-model-access-logs`): Composite filter wrapping native `json_to_metadata` with path-based suffix matching (`:path` ends with `/v1/chat/completions` or `/v1/completions`) + companion Lua SSE filter. Non-inference requests skip body parsing entirely. Non-streaming: `json_to_metadata` extracts model/tokens from JSON body. Streaming SSE: companion Lua filter uses `bodyChunks()` to iterate chunks without buffering, extracts tokens from the final SSE event (requires model server to provide `usage` in final chunk via `stream_options.include_usage=true` or `--enable-force-include-usage`). `INSERT_FIRST` for 429 model preservation. CEL filter for inference-only POST logging. `response_type` classification (`hit`/`rate_limit`/`error`). All identity from FILTER_STATE (`wasm.kuadrant.auth.identity.*`). 12 attributes per log record.
@@ -278,8 +296,7 @@ The monitoring-console-plugin uses prefix matching on datasource names (`OcpData
 
 | File | Change |
 | --- | --- |
-| `deployment/components/observability/otel-collector/envoy-otel-access-log.yaml` | EnvoyFilter `maas-model-access-logs`: OTel ALS cluster + `json_to_metadata` + Lua SSE companion (`bodyChunks()`) + CEL-filtered access log (12 attributes). |
-| `deployment/components/observability/otel-collector/envoy-otel-access-log-lua.yaml` | **Archived** — all-Lua implementation (2 Lua filters: `capture_model` + `extract_tokens` with SSE `bodyChunks()` support). Kept for reference. |
+| `deployment/components/observability/usage-logs/envoy-otel-access-log.yaml` | EnvoyFilter `maas-model-access-logs`: OTel ALS cluster + `json_to_metadata` + Lua SSE companion (`bodyChunks()`) + CEL-filtered access log (12 attributes). |
 | `deployment/components/observability/otel-collector/otel-collector-cr.yaml` | `OpenTelemetryCollector` CR (v1beta1) — replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` → `groupbyattrs` → `batch` → Loki. Includes `transform/redact` (toggleable user_id removal), `sending_queue`, `error_mode: ignore`. Requires Red Hat build of OTel operator. |
 | `deployment/components/observability/otel-collector/otel-collector-rbac.yaml` | SA `usage-logs-collector` + ClusterRole + ClusterRoleBinding for Loki write access (namespace: `opendatahub`) |
 | `deployment/components/observability/otel-collector/kustomization.yaml` | Kustomization: otel-collector-rbac.yaml + otel-collector-cr.yaml + envoy-otel-access-log.yaml |

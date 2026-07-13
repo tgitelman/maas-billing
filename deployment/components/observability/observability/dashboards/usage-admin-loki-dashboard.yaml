@@ -239,7 +239,7 @@ spec:
                   query: >-
                     count(sum by (user_id) (count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="" [$__range])))
+                    | user_id=~"$user" | user_id!="" | user_id!="-" [$__range])))
                     or vector(0)
 
     tokenConsumptionOverTime:
