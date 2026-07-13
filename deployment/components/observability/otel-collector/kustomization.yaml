@@ -6,4 +6,4 @@ metadata:
 resources:
   - otel-collector-rbac.yaml
   - otel-collector-cr.yaml
-  - envoy-otel-access-log.yaml
+  - ../usage-logs/envoy-otel-access-log.yaml
