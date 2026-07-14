@@ -72,6 +72,8 @@ const (
 	baseMaaSAPIServiceName                         = "maas-api"
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 
+	baseUsageLogsEnvoyFilterName = "maas-model-access-logs"
+
 	// Non-tenant-specific resource names (shared infrastructure)
 	PayloadProcessingName                         = "payload-processing"
 	PayloadPreProcessingName                      = "payload-pre-processing"
@@ -179,6 +181,10 @@ func MaaSAPIDeploymentName(tenantID string) string {
 
 func MaaSAPIServiceName(tenantID string) string {
 	return resourceNameForTenant(baseMaaSAPIServiceName, tenantID)
+}
+
+func UsageLogsEnvoyFilterName(tenantID string) string {
+	return resourceNameForTenant(baseUsageLogsEnvoyFilterName, tenantID)
 }
 
 // TenantIdentifierFor extracts the tenant identifier from a tenant config object.
