@@ -14,13 +14,22 @@ todos:
   content: "TODO (deferred): File issue that HTTP+HTTPS listeners cause duplicate ActionSets leading to 403"
   status: pending
 - id: pr-envoyfilter
-  content: "PR #1035: EnvoyFilter + controller integration. Rebased on upstream/main. Composite filter (path suffix match) + Lua SSE + all identity from FILTER_STATE + CEL-filtered OTel ALS (12 attributes). Controller: usageLogging on Config CR (cluster-wide), ensureObservability integration, patchClusterAddress. Branch: feature/envoy-otel-log-jsontometa."
-  status: pending
+  content: "PR #1035: EnvoyFilter + controller integration. MERGED (2026-07-13). Follow-up: per-tenant gateway EnvoyFilter (jrhyness)."
+  status: done
 - id: pr-otel-collector
-  content: "PR TBD: OTel Collector CR (v1beta1) + RBAC. Branch: feature/otel-collector. Requires Red Hat build of OTel operator. memory_limiter, error_mode:ignore, sending_queue, user_id emission toggle."
+  content: "PR #1032: OTel Collector CR (v1beta1) + RBAC. Branch: feature/otel-collector. Requires Red Hat build of OTel operator. memory_limiter, error_mode:ignore, sending_queue, user_id emission toggle. Needs namespace alignment (openshift-ingress → opendatahub) before merging."
   status: pending
 - id: pr-dashboards
-  content: "PR 5: Dashboard migration (Perses usage dashboards with Loki LogQL, loki-query-proxy for user isolation)"
+  content: "PRs #995 (admin dashboard) + #988 (user dashboard, closed): Perses usage dashboards with Loki LogQL, loki-query-proxy for user isolation"
+  status: pending
+- id: multitenant-envoyfilter
+  content: "Follow-up (jrhyness PR #1035 review): Move EnvoyFilter into tenant reconciler for per-tenant gateway support. ahadas agreed — next PR."
+  status: pending
+- id: pr999-proxy-fixes
+  content: "PR #999 proxy bugs: HTTP/1.0 chunked mismatch, duplicate namespace filter, POST support, kustomize namespace override, RBAC gaps (see Proxy Issues section)"
+  status: pending
+- id: otel-namespace-alignment
+  content: "PR #1032: Update service.namespace and kubernetes_namespace_name from openshift-ingress to opendatahub before merging"
   status: pending
 - id: integrate-configreconcile
   content: "DONE: Controller-managed EnvoyFilter lifecycle via `usageLogging` feature gate in Config.Spec (cluster-wide). Integrated into `ensureObservability` method (alongside ensureLimitadorServiceMonitor and ensureUsageDashboard). Controller reads manifest from container filesystem, templates namespace + collector address via structured `patchClusterAddress` helper (unstructured.SetNestedField), applies via SSA with Config ownerReference. Enable/disable toggles create/delete. ObservabilityManifestsPath resolution fixed (traverses up from dashboards dir). Rebased on upstream/main, verified end-to-end on cluster."
@@ -31,7 +40,7 @@ isProject: false
 
 # Envoy OTel Structured Usage Logs — Implementation Record
 
-## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-07-07, updated 2026-07-13)
+## Status: COMPLETE — Full Pipeline Deployed and Verified (2026-07-07, updated 2026-07-14)
 
 ### Upstream Alignment (2026-07-13)
 
@@ -46,6 +55,54 @@ POC branch rebased on `upstream/main` (42 upstream commits incorporated). All up
 | **Container hardening** (#1138) | `readOnlyRootFilesystem`, `seccompProfile` | Included via rebase |
 | **Privacy** (#1133, #1114) | Hash/redact username, sensitive headers | Included via rebase |
 | **EnvoyFilter layout** (#1096) | 8-patch payload-processing in params.go | Included via rebase |
+
+### PR #1035 Merged + Cluster Convention Alignment (2026-07-14)
+
+**PR #1035 merged** (Jul 13) — EnvoyFilter for OTel structured usage logging. Controller-managed via `usageLogging` feature gate. Approved by ahadas + jrhyness.
+
+**Follow-up action** (jrhyness review comment): Move EnvoyFilter into the tenant reconciler for per-tenant gateway support. The current filter hardcodes `maas-default-gateway` by name. Multi-tenancy (each AITenant gets its own gateway) requires per-tenant EnvoyFilter deployment. ahadas agreed — planned for the next PR.
+
+**Cluster aligned to `opendatahub` convention** (Jul 14): The PR #999 user-scoped proxy expects `kubernetes_namespace_name=opendatahub` for security scoping. Aligned the cluster:
+
+| Component | Change |
+|-----------|--------|
+| OTel Collector resource processor | `kubernetes_namespace_name`: `openshift-ingress` → `opendatahub` |
+| OTel Collector resource processor | `service.namespace`: `openshift-ingress` → `opendatahub` |
+| EnvoyFilter resource_attributes | `service.namespace`: `openshift-ingress` → `opendatahub` |
+| LokiStack | Clean redeployed (deleted PVCs) to flush old-convention data |
+| NetworkPolicy | Already had rule for `opendatahub` namespace collectors |
+
+**Note**: EnvoyFilter `service.namespace` is controller-managed (owned by `Config` CR). The OTel Collector's `upsert` processor overrides it regardless, but the controller template should eventually be updated to use `opendatahub`.
+
+### User-scoped Proxy (PR #999) — Deployed and Verified (2026-07-14)
+
+Cherry-picked proxy files from PR #999 (Python rewrite, replaces original Go proxy). Deployed to `kuadrant-system` on `amit.dev.datahub.redhat.com`. User isolation verified end-to-end through dashboards.
+
+**Test results:**
+
+| Test | User | Streams | Users visible | Result |
+|------|------|---------|---------------|--------|
+| Proxy query | `kube:admin` | 3 | `{'kube:admin'}` | Only admin logs |
+| Proxy query | `test-loki-viewer` | 3 | `{'test-loki-viewer'}` | Only viewer logs |
+| Cross-isolation | `test-loki-viewer` (limit=50) | 3 | `{'test-loki-viewer'}` | **Cannot see admin logs** |
+
+**Dashboard verification** (logged in as each user via OpenShift console):
+- Admin: 291 tokens, 6 successful, 2 rate-limited, 42.9% success rate
+- Viewer: 148 tokens, 3 successful, 0 rate-limited, 100% success rate
+
+**Issues found** (see "Proxy Issues" section below for details):
+1. HTTP/1.0 + chunked encoding mismatch (code bug)
+2. Duplicate `kubernetes_namespace_name` filter injection (code bug)
+3. POST method not supported (code limitation)
+4. Kustomize namespace override breaks cross-namespace RoleBinding (deployment bug)
+5. Missing broader Loki ClusterRole — OPA SAR without `resourceName` (deployment gap)
+6. Missing namespace-level view access for OPA matcher (deployment gap)
+
+**Deployment workarounds applied** (no proxy code changes):
+- `LOKI_UPSTREAM_URL` overridden to `openshift-logging` (as manifest instructs)
+- Created `ClusterRole/loki-application-reader` without `resourceNames` restriction
+- Created `RoleBinding/loki-query-proxy-namespace-view` in `opendatahub` for OPA namespace access
+- Created `RoleBinding/loki-query-proxy-application-reader` in `opendatahub`
 
 ### Dashboard fix (2026-07-13)
 
@@ -115,7 +172,7 @@ No OTel ALS, no `json_to_metadata`, no OTel Collector, no Loki. Response body co
 | Gap | How We Solved It |
 | --- | --- |
 | No independent audit log | OTel ALS emits a structured log for every request |
-| No per-request data | 25 structured attributes per log record in Loki |
+| No per-request data | 12 structured attributes per log record in Loki |
 | High-cardinality `user` in Prometheus | Per-user data moved to Loki structured metadata |
 | Dead `tier` label | Replaced with `subscription` everywhere |
 | No token breakdown | `tokens_prompt` and `tokens_completion` extracted by `json_to_metadata` |
@@ -210,7 +267,7 @@ Two datasources in `kuadrant-system` namespace:
 - **`loki`** — direct to LokiStack gateway (SA token auth + kubernetesAuth + TLS)
 - **`scoped-loki`** — routes through loki-query-proxy (kubernetesAuth only, no TLS/secret)
 
-**loki-query-proxy** deployed to `kuadrant-system` namespace (default, overridable via kustomize) — Go service that intercepts Loki queries and injects `user_id="<caller>"` filter based on TokenReview of the caller's Kubernetes token.
+**loki-query-proxy** deployed to `kuadrant-system` namespace (default, overridable via kustomize) — Python service that intercepts Loki queries and injects `kubernetes_namespace_name="opendatahub"` + `user_id="<caller>"` filter based on TokenReview of the caller's Kubernetes token. Uses the pod's service account token for upstream authentication to Loki gateway.
 
 **Table panel**: Both dashboards have a "Usage breakdown" table with three Loki queries merged via `MergeSeries` transform. All table queries use `[$__range]` (negative offset removed — not supported by this Loki version). Table columns group by `model`, `subscription`, `key_name` (structured metadata):
 - **Q1**: Tokens per model/subscription/key_name — `sum by (model, subscription, key_name) (sum_over_time(... | unwrap tokens_total [$__range]))`
@@ -278,7 +335,7 @@ Controlled by LokiStack `spec.limits.global.otlp.streamLabels.resourceAttributes
 > **10 stream labels** (low cardinality, indexed) — enables `{response_type="rate_limit"}` as a stream selector.
 > **Structured metadata** queryable via pipeline filters: `| response_code="200"`, `| key_name="my-key"`, `| json | tokens_total > 100`.
 > `key_name` deliberately NOT a stream label despite being in `groupbyattrs` — high cardinality (every API key has a unique name). LokiStack `streamLabels.resourceAttributes` does not include `key_name`.
-> **Dropped** (per ahadas review #1031): `request_id`, `method`, `path`, `duration_ms`, `downstream_remote_address` — operational data not needed for usage logging.
+> **Dropped** (per ahadas review #1031): `request_id`, `path`, `duration_ms`, `downstream_remote_address` — operational data not needed for usage logging. `method` retained in `groupbyattrs` (always "POST" due to CEL filter, but useful for OTel Collector pipeline consistency).
 
 ---
 
@@ -300,7 +357,7 @@ The monitoring-console-plugin uses prefix matching on datasource names (`OcpData
 | `deployment/components/observability/otel-collector/otel-collector-cr.yaml` | `OpenTelemetryCollector` CR (v1beta1) — replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` → `groupbyattrs` → `batch` → Loki. Includes `transform/redact` (toggleable user_id removal), `sending_queue`, `error_mode: ignore`. Requires Red Hat build of OTel operator. |
 | `deployment/components/observability/otel-collector/otel-collector-rbac.yaml` | SA `usage-logs-collector` + ClusterRole + ClusterRoleBinding for Loki write access (namespace: `opendatahub`) |
 | `deployment/components/observability/otel-collector/kustomization.yaml` | Kustomization: otel-collector-rbac.yaml + otel-collector-cr.yaml + envoy-otel-access-log.yaml |
-| `deployment/components/observability/loki-proxy/` | Loki query proxy (Go source ConfigMap, deployment, RBAC, service) — PR #999 |
+| `deployment/components/observability/usage-logs/` | Loki query proxy (Python source ConfigMap, deployment, RBAC, service) — PR #999 (replaces `loki-proxy/` Go version) |
 | `deployment/components/observability/observability/dashboards/` | Perses dashboards (usage-admin, usage-user), datasources (loki, scoped-loki), kustomization — PRs #995, #988 |
 | `deployment/base/observability/telemetry-policy.yaml` | TelemetryPolicy (subscription, model, organization_id, cost_center) |
 | `scripts/observability/install-observability.sh` | OTel Collector deploy: kustomize build + sed substitution |
@@ -342,7 +399,7 @@ Four patches applied to `maas-default-gateway` via `targetRefs`:
 | `tokens_completion` | `%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_completion)%` | Usage |
 | `model` | `%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%` | Usage |
 
-Resource attributes: `service.name=maas-gateway`, `service.namespace=openshift-ingress`.
+Resource attributes: `service.name=maas-gateway`, `service.namespace=opendatahub` (aligned from `openshift-ingress` on 2026-07-14 to match proxy convention).
 
 **Patch 4** emits **12 structured attributes** per log record.
 
@@ -367,8 +424,8 @@ processors:
     attributes:
     - { action: insert, key: log_type, value: application }
     - { action: upsert, key: service.name, value: maas-gateway }
-    - { action: upsert, key: service.namespace, value: openshift-ingress }
-    - { action: upsert, key: kubernetes_namespace_name, value: openshift-ingress }
+    - { action: upsert, key: service.namespace, value: opendatahub }
+    - { action: upsert, key: kubernetes_namespace_name, value: opendatahub }
     - { action: upsert, key: service.instance.id, value: "${env:POD_NAME}" }
   transform:
     error_mode: ignore
@@ -469,19 +526,19 @@ User:  Dashboard → scoped-loki datasource → loki-query-proxy → LokiStack G
 
 | Aspect | Query Proxy (chosen) | Static Mode (rejected) |
 | --- | --- | --- |
-| User isolation | Enforced by proxy | Storage-level (Loki-native) |
-| Admin cluster-wide | Works (admin bypass) | Blocked (can't aggregate tenants) |
+| User isolation | Enforced by proxy (user-scoped only) | Storage-level (Loki-native) |
+| Admin cluster-wide | Decoupled — admin dashboard uses direct `loki` datasource, NOT the proxy | Blocked (can't aggregate tenants) |
 | Operational cost | Low (1 deployment) | High (400 tenant defs + OIDC secrets) |
 | LokiStack changes | None | Mode change + per-user tenant blocks |
 | Scalability | Unlimited users | CR becomes massive |
 
-### Implementation
+### Implementation (Python rewrite — PR #999 latest)
 
-Go source (~160 lines, stdlib only) mounted as ConfigMap, run with `go run` on stock `ubi9/go-toolset:1.25`. 5 files in `deployment/components/observability/loki-proxy/` (PR #999).
+Python source (~400 lines, stdlib only) mounted as ConfigMap, run with `python3` on stock `ubi9/python-312:1`. 4 files in `deployment/components/observability/usage-logs/` (PR #999).
 
-**Key behaviors**: TokenReview-based auth (no JWT parsing), admin bypass for `system:cluster-admins`/`system:masters`, quote-aware LogQL rewriter, GET only, `allowedPaths` whitelist (includes label/series endpoints for COO 1.5+), hardened security context, JSON error responses.
+**Key behaviors**: TokenReview-based auth (`auth.py`), **no admin bypass** (correct — admin dashboard uses direct `loki` datasource, not the user-scoped proxy), hardcoded `kubernetes_namespace_name=opendatahub` security scope, `user_id` injection into LogQL queries, GET/POST support (POST fails — see issues), hardened security context (read-only root, non-root, seccomp), JSON error responses.
 
-31/31 tests pass: 15 functional, 9 security, 4 rewriter robustness, 3 admin edge cases.
+**Modules**: `main.py` (HTTP server, request handling), `auth.py` (TokenReview + group extraction), `rewriter.py` (LogQL query rewriting), `config.py` (configuration from env vars).
 
 ---
 
@@ -569,9 +626,9 @@ Stat panels use `[$__range]` + `calculation: last`. Table queries use `[$__range
 #     in otel-collector-cr.yaml before applying)
 kubectl apply -k deployment/components/observability/otel-collector/
 
-# 2. Deploy loki-query-proxy (Go compiles on first start, ~60-90s)
-kubectl apply -k deployment/components/observability/loki-proxy/
-kubectl rollout status deployment/loki-query-proxy-user -n kuadrant-system --timeout=180s
+# 2. Deploy loki-query-proxy (Python — starts in seconds)
+kubectl apply -k deployment/components/observability/usage-logs/
+kubectl rollout status deployment/usage-logs-tenancy-proxy -n kuadrant-system --timeout=60s
 
 # 3. Deploy Perses dashboards + datasources
 kubectl apply -k deployment/components/observability/observability/dashboards/
@@ -591,20 +648,20 @@ Proxy deploys to `kuadrant-system` by default. OTel Collector CR `usage-logs` ge
 
 | PR | Branch | Status | Scope | Files | Dependencies |
 | --- | --- | --- | --- | --- | --- |
-| [#1035](https://github.com/opendatahub-io/models-as-a-service/pull/1035) EnvoyFilter | `feature/envoy-otel-log-jsontometa` | Open (draft) | Composite filter wrapping `json_to_metadata` with `:path` suffix matching (inference paths only) + companion Lua SSE filter. All identity from FILTER_STATE (`wasm.kuadrant.auth.identity.*`) — `user_id`, `subscription`, `groups`, `key_id`, `key_name`, `organization_id`. `on_present` only for model. INSERT_FIRST for 429 model preservation. 12 attributes. | 1 file, ~380 lines | OTel Collector deployed on port 4317 |
-| [#1032](https://github.com/opendatahub-io/models-as-a-service/pull/1032) OTel Collector CR | `feature/otel-collector` | Open (draft) | `OpenTelemetryCollector` CR (v1beta1) + RBAC. Pipeline: `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` (user_id emission toggle) → `groupbyattrs` (8 stream labels, user_id togglable) → `batch` → Loki (`sending_queue`). | 2 files (CR + RBAC) | EnvoyFilter PR. OTel operator installed. LokiStack with streamLabels configured. |
-| [#999](https://github.com/opendatahub-io/models-as-a-service/pull/999) Loki Query Proxy | `feature/loki-user-proxy` | Open | Go proxy: ConfigMap source, deployment, RBAC, service, kustomization. AllowedPaths includes label/series endpoints. `LOKI_UPSTREAM_URL` uses `__LOKI_GATEWAY_SVC__` sed placeholder. | 5 files, 672 lines | None (standalone) |
+| [#1035](https://github.com/opendatahub-io/models-as-a-service/pull/1035) EnvoyFilter | `feature/envoy-otel-log-jsontometa` | **Merged** (Jul 13) | Composite filter + Lua SSE + controller integration (`usageLogging` feature gate). 12 attributes, all identity from FILTER_STATE. **Follow-up**: per-tenant gateway EnvoyFilter (jrhyness). | 7 files, 682 lines | OTel Collector on port 4317 |
+| [#1032](https://github.com/opendatahub-io/models-as-a-service/pull/1032) OTel Collector CR | `feature/otel-collector` | Open (draft) | `OpenTelemetryCollector` CR + RBAC. **Note**: `service.namespace` and `kubernetes_namespace_name` in CR still default to `openshift-ingress` — should update to `opendatahub` before merging. | 2 files (CR + RBAC) | EnvoyFilter PR (merged). OTel operator. LokiStack. |
+| [#999](https://github.com/opendatahub-io/models-as-a-service/pull/999) Loki Query Proxy | `feature/loki-user-proxy` | Open | Python proxy (stdlib-only, ubi9): TokenReview auth, `inject_user_filter` (`kubernetes_namespace_name=opendatahub` + `user_id`). **Deployed and verified** on amit dev — user isolation works. See "Proxy Issues" section. | 4 files, 684 lines | None (standalone) |
 | [#995](https://github.com/opendatahub-io/models-as-a-service/pull/995) Admin Dashboard | `feature-loki-admin-dashboard` | Open | Admin usage dashboard + `loki` datasource (direct to LokiStack). `LokiLabelValuesVariable` (COO 1.5+). `customAllValue: ".*"` for absent-label matching. `response_type` stream labels. | 3 files | LokiStack + OTel pipeline deployed. Loki infra provisioned by opendatahub-operator. |
 | [#988](https://github.com/opendatahub-io/models-as-a-service/pull/988) User Dashboard | `feature/loki-user-dashboard` | **Closed** | User-scoped dashboard + `scoped-loki` datasource (through proxy). `LokiLabelValuesVariable`. `customAllValue: ".*"`. | 3 files | Proxy PR (#999). |
 | [#1031](https://github.com/opendatahub-io/models-as-a-service/pull/1031) EnvoyFilter (Lua) | `feature/envoy-otel-access-log-filter` | **Closed** | Superseded by #1035 (json_to_metadata). Original Lua-only implementation. | — | — |
 
-**Merge order**: EnvoyFilter → OTel Collector → Proxy (#999) → Admin Dashboard (#995) → User Dashboard (#988).
+**Merge order**: ~~EnvoyFilter~~ (merged) → OTel Collector → Proxy (#999) → Admin Dashboard (#995) → User Dashboard (#988).
 
 **Note**: Admin Dashboard and Proxy are independent (no code dependency), but User Dashboard requires Proxy (datasource URL points to proxy service). All three dashboard/proxy PRs require the OTel pipeline to be deployed for Loki data to exist.
 
-### PR #1035 Review — Resolved (2026-07-07)
+### PR #1035 Review — Resolved and Merged (2026-07-13)
 
-All review comments addressed:
+All review comments addressed, PR merged:
 1. Comment cleanup (4 items) — resolved
 2. FILTER_STATE vs headers — **resolved**: ahadas agreed to switch ALL identity fields to FILTER_STATE (single source of truth)
 3. Per-tenant granularity question — **resolved**: `usageLogging` moved to `Config` CR (cluster-wide, matching existing metrics/observability toggles)
@@ -618,13 +675,33 @@ All review rounds complete. Key changes: datasource display name → "Usage", na
 
 ---
 
-## Loki Query Proxy — POC Limitations
+## Loki Query Proxy — Proxy Issues (PR #999 Python rewrite)
 
-| # | Limitation | Production path |
+Found during deployment/testing on amit dev (2026-07-14). **No proxy code was modified** — all workarounds are deployment-side.
+
+### Code Bugs (need fixes in PR #999)
+
+| # | Issue | Severity | Detail |
+| --- | --- | --- | --- |
+| 1 | **HTTP/1.0 + chunked encoding mismatch** | High | `BaseHTTPRequestHandler` responds with HTTP/1.0 but forwards upstream's `Transfer-Encoding: chunked` header unchanged. HTTP/1.0 does not support chunked encoding → `curl` fails with "Illegal or missing hexadecimal sequence in chunked-encoding". Workaround: `curl --raw`. Fix: switch to HTTP/1.1 (`self.protocol_version = "HTTP/1.1"`) or strip `Transfer-Encoding` and set `Content-Length`. |
+| 2 | **Duplicate `kubernetes_namespace_name` filter** | Medium | `inject_user_filter` always appends `kubernetes_namespace_name="opendatahub"` without checking if the query already contains that label. A broad query like `{kubernetes_namespace_name=~".+"}` becomes `{kubernetes_namespace_name=~".+", kubernetes_namespace_name="opendatahub"}` → Loki rejects with 400 (contradictory matchers for the same label). Fix: check for existing matcher before injecting. |
+| 3 | **POST method not handled** | Medium | `do_POST` is not implemented. Perses datasource sends POST for some query types. The proxy responds with "Method Not Allowed". Fix: add `do_POST = do_GET` or equivalent. |
+| 4 | **Single-threaded HTTP server** | Low | `BaseHTTPRequestHandler` processes one request at a time. Under concurrent dashboard loads this will block. Acceptable for POC/testing. Production: `ThreadingHTTPServer` or WSGI. |
+
+### Deployment / RBAC Gaps (need fixes in PR #999 manifests)
+
+| # | Issue | Detail |
 | --- | --- | --- |
-| A | `go run` on every pod start (~60-90s cold start) | Init container pre-compile or proper image build |
-| B | Full response buffering (`io.ReadAll`) | Fine for dashboard queries. Fix: `io.Copy` streaming for `/tail` |
-| C | SA token read from disk per request | No real impact (tmpfs). Production: cache with fsnotify |
+| 5 | **Kustomize `namespace:` override breaks cross-namespace RoleBinding** | `kustomization.yaml` sets `namespace: kuadrant-system` globally, which also overrides the `opendatahub` namespace in the `RoleBinding` for `cluster-logging-application-view`. The binding ends up in `kuadrant-system` instead of `opendatahub` → proxy SA has no Loki access. Fix: use kustomize `replacements` to selectively set namespace, or move the cross-namespace binding out. |
+| 6 | **Missing broader Loki ClusterRole** | The proxy SA is bound to `cluster-logging-application-view`, but that ClusterRole restricts `resourceNames: ["logs"]`. Loki gateway's OPA performs SubjectAccessReview on `loki.grafana.com/application` without `resourceName` → SAR fails. Workaround: created `ClusterRole/loki-application-reader` without `resourceNames` restriction. This should be added to the proxy's RBAC manifest. |
+| 7 | **Missing namespace-level view access** | OPA checks the proxy SA has access to the namespace named in `kubernetes_namespace_name`. Without a `RoleBinding` in `opendatahub`, OPA denies access. Workaround: created `RoleBinding/loki-query-proxy-namespace-view` binding proxy SA to `view` in `opendatahub`. This should be in the RBAC manifest. |
+
+### Not Issues
+
+| Item | Why it's fine |
+| --- | --- |
+| No admin bypass | **Correct by design** — admin dashboard routes through direct `loki` datasource (not proxy). User-scoped proxy should filter ALL users, including admins. |
+| `kubernetes_namespace_name=opendatahub` hardcoded | Security scoping mechanism — restricts proxy users to logs from the platform namespace only. Could be made configurable via env var. |
 
 ---
 
@@ -635,6 +712,9 @@ All review rounds complete. Key changes: datasource display name → "Usage", na
 3. **Loki infra in opendatahub-operator**: CA ConfigMap, ClusterRoleBinding, SA token Secret — platform-level resources for operator to provision.
 4. **`organization_id` not yet populated**: AuthPolicy missing `organizationId` property. Requires `maasauthpolicy_controller.go` change.
 5. **`PersesGlobalDatasource`**: Available in `v1alpha2`. Deploy `loki` and `scoped-loki` as global datasources.
+6. **Multi-tenant EnvoyFilter** (jrhyness, PR #1035 review): Move EnvoyFilter creation into tenant reconciler. Current implementation hardcodes `maas-default-gateway` — when tenants get their own gateways, each needs its own EnvoyFilter. ahadas agreed to handle in next PR.
+7. **PR #999 proxy bug fixes**: Address HTTP/1.0 chunked mismatch, duplicate namespace filter injection, POST support, kustomize namespace override, and RBAC gaps (see "Proxy Issues" section).
+8. **OTel Collector CR namespace alignment**: Update `service.namespace` and `kubernetes_namespace_name` in PR #1032 from `openshift-ingress` to `opendatahub` before merging.
 
 ---
 

@@ -1,0 +1,470 @@
+# Loki Query Proxy -- Python stdlib-only implementation
+# Runs on ubi9/python-312 base image with zero external dependencies.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-query-proxy-source
+  labels:
+    app: loki-query-proxy
+    app.kubernetes.io/managed-by: maas-observability
+    app.kubernetes.io/component: loki-proxy
+data:
+  main.py: |
+    #!/usr/bin/env python3
+    """Loki Query Proxy - stdlib-only implementation."""
+    import json
+    import logging
+    import os
+    import ssl
+    import sys
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from urllib.parse import urlparse, parse_qs, urlencode, urljoin
+
+    from auth import extract_from_bearer_token, create_ssl_context
+    from config import load_config_from_env
+    from rewriter import inject_user_filter
+
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    logger = logging.getLogger(__name__)
+
+    # Global configuration
+    cfg = None
+    loki_upstream = None
+    ssl_context = None
+    token_review_url = None
+
+    ALLOWED_PATHS = {
+        "/loki/api/v1/query",
+        "/loki/api/v1/query_range",
+        "/loki/api/v1/index/stats",
+        "/loki/api/v1/index/volume",
+        "/loki/api/v1/index/volume_range",
+        "/loki/api/v1/labels",
+        "/loki/api/v1/series",
+        "/health",
+        "/ready",
+    }
+
+    HOP_BY_HOP_HEADERS = {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "authorization",
+        "content-length",
+    }
+
+
+    def is_allowed_path(path):
+        """Check if path is allowed."""
+        if path in ALLOWED_PATHS:
+            return True
+        if path.startswith("/loki/api/v1/label/") and path.endswith("/values"):
+            return True
+        return False
+
+
+    class ProxyHandler(BaseHTTPRequestHandler):
+        """HTTP request handler for the Loki proxy."""
+
+        def log_message(self, format, *args):
+            """Suppress default logging - we handle it ourselves."""
+            pass
+
+        def send_json_error(self, msg, code):
+            """Send JSON error response."""
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            response = {
+                "status": "error",
+                "error": msg,
+                "errorType": "proxy",
+                "data": None,
+            }
+            self.wfile.write(json.dumps(response).encode())
+
+        def do_GET(self):
+            """Handle GET requests."""
+            logger.info(f"REQ GET {self.path}")
+
+            # Health check endpoints
+            if self.path in ("/health", "/ready"):
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.end_headers()
+                    self.wfile.write(b"OK\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    # Kubernetes probes may close connection early - this is normal
+                    pass
+                return
+
+            # Authenticate and extract username
+            auth_header = self.headers.get("Authorization", "")
+            if not auth_header:
+                logger.error("Missing Authorization header")
+                self.send_json_error("Unauthorized", 401)
+                return
+
+            try:
+                user_info = extract_from_bearer_token(
+                    auth_header, token_review_url, ssl_context
+                )
+            except Exception as e:
+                logger.error(f"Auth extraction failed: {e}")
+                self.send_json_error("Unauthorized", 401)
+                return
+
+            username = user_info.username
+            logger.info(f"Filtering by user_id={username}")
+
+            # Parse path and check if allowed
+            parsed = urlparse(self.path)
+            if not is_allowed_path(parsed.path):
+                logger.warning(f"Blocked access to {parsed.path} for user={username}")
+                self.send_json_error("Forbidden: endpoint not available", 403)
+                return
+
+            # Parse and rewrite query parameters
+            query_params = parse_qs(parsed.query, keep_blank_values=True)
+
+            if "query" in query_params:
+                original_query = query_params["query"][0]
+                rewritten_query = inject_user_filter(original_query, username)
+                query_params["query"] = [rewritten_query]
+                logger.info(
+                    f"Query rewritten for user={username}: "
+                    f"original={original_query} -> rewritten={rewritten_query}"
+                )
+
+            # Build upstream URL
+            upstream_parsed = urlparse(loki_upstream)
+            upstream_path = upstream_parsed.path + parsed.path
+            if query_params:
+                query_string = urlencode(query_params, doseq=True)
+                upstream_url = f"{upstream_parsed.scheme}://{upstream_parsed.netloc}{upstream_path}?{query_string}"
+            else:
+                upstream_url = f"{upstream_parsed.scheme}://{upstream_parsed.netloc}{upstream_path}"
+
+            # Prepare upstream request
+            from urllib.request import Request, urlopen
+
+            # Copy headers, excluding hop-by-hop
+            headers = {}
+            for key, value in self.headers.items():
+                if key.lower() not in HOP_BY_HOP_HEADERS:
+                    headers[key] = value
+
+            headers["Host"] = upstream_parsed.netloc
+            headers["X-Scope-OrgID"] = "application"
+
+            # Add service account token for upstream authentication
+            try:
+                with open("/var/run/secrets/kubernetes.io/serviceaccount/token", "r") as f:
+                    sa_token = f.read().strip()
+                    headers["Authorization"] = f"Bearer {sa_token}"
+            except OSError:
+                pass
+
+            # Make upstream request
+            try:
+                from urllib.error import HTTPError
+                req = Request(upstream_url, headers=headers, method="GET")
+                with urlopen(req, timeout=60, context=ssl_context) as resp:
+                    resp_body = resp.read()
+                    resp_code = resp.status
+                    resp_headers = resp.headers
+
+                logger.info(f"RESP {parsed.path} {resp_code} ({len(resp_body)} bytes)")
+
+                # Handle non-JSON error responses
+                is_json = len(resp_body) > 0 and resp_body[0:1] in (b"{", b"[")
+                if resp_code >= 400 and not is_json:
+                    err_msg = resp_body.decode("utf-8", errors="replace").strip()
+                    if not err_msg:
+                        err_msg = f"Loki returned HTTP {resp_code}"
+                    logger.error(f"Upstream non-JSON error {resp_code}: {err_msg[:200]}")
+                    self.send_json_error(err_msg, resp_code)
+                    return
+
+                # Forward response
+                self.send_response(resp_code)
+                for key, value in resp_headers.items():
+                    self.send_header(key, value)
+                self.end_headers()
+                self.wfile.write(resp_body)
+
+            except HTTPError as e:
+                # Log the error response body
+                try:
+                    error_body = e.read().decode('utf-8', errors='replace')
+                    logger.error(f"Upstream HTTP {e.code} error body: {error_body[:500]}")
+                except:
+                    logger.error(f"Upstream HTTP {e.code}: {e.reason}")
+                self.send_json_error(f"Bad gateway: HTTP {e.code} {e.reason}", 502)
+            except Exception as e:
+                logger.error(f"Upstream request failed: {type(e).__name__}: {e}")
+                self.send_json_error(f"Bad gateway: {e}", 502)
+
+
+    def initialize():
+        """Initialize global configuration."""
+        global cfg, loki_upstream, ssl_context, token_review_url
+
+        try:
+            cfg = load_config_from_env()
+        except Exception as e:
+            logger.fatal(f"Failed to load config: {e}")
+            sys.exit(1)
+
+        logger.info(f"Starting loki-query-proxy on port {cfg.port}")
+        logger.info(f"Loki upstream: {cfg.loki_upstream_url}")
+
+        loki_upstream = cfg.loki_upstream_url
+
+        # Create SSL context with CA certificates
+        ssl_context = create_ssl_context()
+
+        # Build TokenReview URL
+        api_host = os.getenv("KUBERNETES_SERVICE_HOST")
+        api_port = os.getenv("KUBERNETES_SERVICE_PORT", "443")
+        token_review_url = (
+            f"https://{api_host}:{api_port}/apis/authentication.k8s.io/v1/tokenreviews"
+        )
+        logger.info(f"TokenReview endpoint: {token_review_url}")
+
+
+    def main():
+        """Main entry point."""
+        initialize()
+
+        server = HTTPServer(("0.0.0.0", int(cfg.port)), ProxyHandler)
+        logger.info(f"Proxy listening on ::{cfg.port}")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            logger.info("Shutting down")
+            server.shutdown()
+
+
+    if __name__ == "__main__":
+        main()
+
+  auth.py: |
+    """Authentication via Kubernetes TokenReview API."""
+    import json
+    import os
+    import ssl
+    from urllib.request import Request, urlopen
+
+    SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+
+    class UserInfo:
+        """User information extracted from token."""
+
+        def __init__(self, username):
+            self.username = username
+
+
+    def create_ssl_context():
+        """Create SSL context with Kubernetes CA certificates."""
+        ca_paths = [
+            "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt",
+            "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+        ]
+
+        context = ssl.create_default_context()
+
+        for ca_path in ca_paths:
+            try:
+                context.load_verify_locations(ca_path)
+                import logging
+                logging.getLogger(__name__).info(f"Loaded CA certificate from {ca_path}")
+            except OSError:
+                pass
+
+        return context
+
+
+    def extract_from_bearer_token(auth_header, token_review_url, ssl_context):
+        """
+        Extract user info from Authorization: Bearer <token>.
+
+        All tokens are validated server-side via the Kubernetes TokenReview API.
+        """
+        if not auth_header:
+            raise ValueError("missing Authorization header")
+
+        parts = auth_header.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            raise ValueError("invalid Authorization header format")
+
+        return resolve_token(parts[1], token_review_url, ssl_context)
+
+
+    def resolve_token(token, token_review_url, ssl_context):
+        """
+        Call the Kubernetes TokenReview API to validate bearer token.
+
+        This is the sole authentication path -- tokens are never parsed or
+        trusted locally.
+        """
+        try:
+            with open(SA_TOKEN_PATH, "r") as f:
+                sa_token = f.read().strip()
+        except OSError as e:
+            raise ValueError(f"cannot read SA token for TokenReview: {e}") from e
+
+        body = {
+            "apiVersion": "authentication.k8s.io/v1",
+            "kind": "TokenReview",
+            "spec": {"token": token},
+        }
+
+        body_bytes = json.dumps(body).encode("utf-8")
+
+        req = Request(
+            token_review_url,
+            data=body_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {sa_token}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urlopen(req, timeout=10, context=ssl_context) as resp:
+                resp_body = resp.read()
+                resp_code = resp.status
+        except Exception as e:
+            raise ValueError(f"TokenReview request failed: {e}") from e
+
+        if resp_code not in (200, 201):
+            raise ValueError(f"TokenReview returned HTTP {resp_code}")
+
+        try:
+            result = json.loads(resp_body)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"failed to parse TokenReview response: {e}") from e
+
+        status = result.get("status", {})
+        if not status.get("authenticated", False):
+            error_msg = status.get("error", "token not authenticated")
+            raise ValueError(f"TokenReview: {error_msg}")
+
+        user = status.get("user", {})
+        username = user.get("username", "")
+        if not username:
+            raise ValueError("TokenReview returned empty username")
+
+        return UserInfo(username=username)
+
+  rewriter.py: |
+    """LogQL query rewriting to inject user filters."""
+
+
+    def escape_logql_value(value):
+        """Escape special characters in LogQL values."""
+        value = value.replace("\\", "\\\\")
+        value = value.replace('"', '\\"')
+        return value
+
+
+    def inject_user_filter(query, username):
+        """
+        Inject user filter into LogQL query.
+
+        Modifies stream selectors to add kubernetes_namespace_name="opendatahub" label
+        and adds pipeline filter `| user_id="<user>"` after the selector.
+
+        Examples:
+            log:    {app="x"} | line_format "{{.msg}}"
+                 -> {app="x", kubernetes_namespace_name="opendatahub"} | user_id="alice" | line_format "{{.msg}}"
+
+            metric: sum(count_over_time({app="x"} [5m]))
+                 -> sum(count_over_time({app="x", kubernetes_namespace_name="opendatahub"} | user_id="alice" [5m]))
+        """
+        if not query or not username:
+            return query
+
+        namespace_label = ', kubernetes_namespace_name="opendatahub"'
+        user_filter = f' | user_id="{escape_logql_value(username)}"'
+        result = []
+        in_selector = False
+        in_double_quote = False
+        in_backtick = False
+        i = 0
+
+        while i < len(query):
+            ch = query[i]
+
+            # Handle escape sequences in double quotes
+            if ch == "\\" and in_double_quote and i + 1 < len(query):
+                result.append(ch)
+                i += 1
+                result.append(query[i])
+                i += 1
+                continue
+
+            # Toggle quote states
+            if ch == '"' and not in_backtick:
+                in_double_quote = not in_double_quote
+            if ch == "`" and not in_double_quote:
+                in_backtick = not in_backtick
+
+            in_quote = in_double_quote or in_backtick
+
+            # Track selector braces
+            if ch == "{" and not in_quote:
+                in_selector = True
+
+            # Inject namespace label before closing selector brace
+            if ch == "}" and in_selector and not in_quote:
+                result.append(namespace_label)
+                result.append(ch)
+                result.append(user_filter)
+                in_selector = False
+            else:
+                result.append(ch)
+
+            i += 1
+
+        return "".join(result)
+
+  config.py: |
+    """Configuration loader for Loki query proxy."""
+    import os
+
+
+    class ProxyConfig:
+        """Configuration for the Loki query proxy."""
+
+        def __init__(self):
+            self.port = self._get_env("PORT", "8080")
+            self.loki_upstream_url = self._get_env("LOKI_UPSTREAM_URL", "")
+
+            if not self.loki_upstream_url:
+                raise ValueError("LOKI_UPSTREAM_URL is required")
+
+        @staticmethod
+        def _get_env(key, default=""):
+            """Get environment variable with default value."""
+            return os.getenv(key, default)
+
+
+    def load_config_from_env():
+        """Load configuration from environment variables."""
+        return ProxyConfig()

@@ -11,10 +11,9 @@ metadata:
 namespace: kuadrant-system
 
 resources:
-  - proxy-source-configmap.yaml
-  - rbac.yaml
-  - service.yaml
-  - deployment-user.yaml
+  - tenancy-proxy-code.yaml
+  - tenancy-proxy-rbac.yaml
+  - tenancy-proxy.yaml
 
 replacements:
   - source:
