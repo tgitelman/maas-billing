@@ -104,9 +104,30 @@ Cherry-picked proxy files from PR #999 (Python rewrite, replaces original Go pro
 - Created `RoleBinding/loki-query-proxy-namespace-view` in `opendatahub` for OPA namespace access
 - Created `RoleBinding/loki-query-proxy-application-reader` in `opendatahub`
 
-### Dashboard fix (2026-07-13)
+### Dashboard fixes (2026-07-13, updated 2026-07-14)
 
 Active Users panel: added `| user_id!="-"` to exclude Envoy dash sentinel from distinct user count. Verified against Loki — without filter: 3 users (includes `"-"`), with filter: 2 users (correct). Fix applied to `usage-admin-loki-dashboard.yaml` on POC branch and pending on PR #995 branch.
+
+**Naming alignment (2026-07-14)**: Aligned Loki dashboard panel names with upstream Prometheus dashboard (PR #1156 sentence case convention):
+- "Total Tokens" → "Total tokens"
+- "Total Successful Requests" → "Total requests" (query changed: no `response_type` filter — counts all requests)
+- "Total Rate Limited Requests" → "Total rate limited"
+- "Success Rate" → "Success rate"
+- "Active Users" → "Active users"
+- "Token consumption" (panel) → "Token consumption chart"
+- "Token consumption" (layout title) → "Token consumption" (matching PR #1156)
+- Removed stale "Grafana filled mock" dev note from admin `tokenConsumptionOverTime` description
+
+**"Total requests" counts all**: Query uses no `response_type` filter — counts hit + rate_limit + error. Consistent with upstream Prometheus `Total requests` (`authorized_calls + limited_calls`).
+
+**Verified on fresh LokiStack** (2026-07-14): Wiped all Loki data (deleted PVCs), redeployed LokiStack, generated fresh traffic. Results with clean data (zero pre-CEL entries):
+- Total tokens: 647 (from 15 hits across 3 models)
+- Total requests: 76 (15 hit + 35 rate_limit + 26 error = 76, math verified)
+- Total rate limited: 35
+- Success rate: 19.7% (15/76)
+- Active users: 1
+- Token consumption chart: 3 models (177 + 226 + 244 = 647, matches total)
+- Empty `response_type` entries: **0** (confirms all entries have response_type on fresh deploy)
 
 All core components deployed and verified on clusters `amit.dev.datahub.redhat.com` (ODH), `giteltal.dev.datahub.redhat.com` (ODH), and `ahadas-ahadas-rhoai.dev.datahub.redhat.com` (RHOAI). Pipeline: Envoy → OTel Collector (OpenTelemetryCollector CR) → Loki. All identity fields sourced from Kuadrant WASM plugin's FILTER_STATE (`wasm.kuadrant.auth.identity.*`). Composite filter (path-based suffix match) restricts body parsing to inference paths only. Verified on all platforms.
 
@@ -295,7 +316,7 @@ Two datasources in `kuadrant-system` namespace:
 | `json_to_metadata` + Lua SSE companion | Native Envoy filter for JSON responses — replaced Lua after ahadas review (PR #1031). Wrapped in Composite filter with `:path` suffix matching to restrict body parsing to inference paths only. Companion Lua filter handles SSE via `bodyChunks()` (zero-buffering chunk iteration). `on_present` only for model prevents "unknown" log pollution. See "Why json_to_metadata replaced Lua" section below. |
 | Composite filter (path matching) | Wraps `json_to_metadata` in `ExtensionWithMatcher` with `HttpRequestHeaderMatchInput` suffix match on `:path`. Only `/v1/chat/completions` and `/v1/completions` trigger body parsing. Eliminates unnecessary buffering of non-inference traffic (`/v1/models`, `/maas-api/*`, health checks). Resolves the "body buffering scope tradeoff" that existed with bare `json_to_metadata`. |
 | CEL filter (inference-only) | Only `/v1/chat/completions` and `/v1/completions` logged. POST only. Eliminates noise from `/v1/models`, health checks, etc. |
-| `response_type` via CEL | `hit`/`rate_limit`/`error` — low cardinality stream label for Loki. Exact `response_code` still available as structured metadata. All dashboard stat/table queries use `response_type` for filtering (e.g. "Total Successful Requests" counts only `response_type="hit"`, not all requests). |
+| `response_type` via CEL | `hit`/`rate_limit`/`error` — low cardinality stream label for Loki. Exact `response_code` still available as structured metadata. Dashboard stat queries use `response_type` for filtering (e.g. "Total rate limited" = `response_type="rate_limit"`). "Total requests" counts all response types. Success rate = `hit / all`. |
 | Identity: All from FILTER_STATE | All 6 identity fields sourced from `%FILTER_STATE(wasm.kuadrant.auth.identity.*:PLAIN)%`. FILTER_STATE is internal Envoy state (never on wire, not spoofable, survives 429). Per ahadas review (2026-07-01): simplifies architecture, single source of truth. |
 | EnvoyFilter (not Istio Telemetry CR) | Telemetry API lacks custom OTel attributes; `ConfigMap/istio` owned by ingress-operator |
 | `sed` placeholders (not `envsubst`) | Kustomize can't target YAML-in-YAML |
@@ -595,9 +616,14 @@ Identity extraction updated per ahadas review: ALL identity fields now sourced e
 sum by (user_id) (sum_over_time({service_name="maas-gateway", response_type="hit"} | unwrap tokens_total [$__range]))
 ```
 
-**Requests per user:**
+**Total requests (all response types):**
 ```logql
-sum by (user_id) (count_over_time({service_name="maas-gateway", response_type="hit"} [$__range]))
+sum(count_over_time({service_name="maas-gateway"} [$__range]))
+```
+
+**Success rate (hit / all):**
+```logql
+(sum(count_over_time({service_name="maas-gateway", response_type="hit"} [$__range])) / sum(count_over_time({service_name="maas-gateway"} [$__range]))) or vector(1)
 ```
 
 **Rate-limited count (stream selector — no pipeline filter needed):**

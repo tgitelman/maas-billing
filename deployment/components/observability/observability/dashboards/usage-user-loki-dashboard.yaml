@@ -79,7 +79,7 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "Total Tokens"
+          name: "Total tokens"
           description: "Total tokens consumed over the selected time window."
         plugin:
           kind: StatChart
@@ -108,8 +108,8 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "Total Successful Requests"
-          description: "Total successful (2xx) requests over the selected time window."
+          name: "Total requests"
+          description: "Total API requests over the selected time window."
         plugin:
           kind: StatChart
           spec:
@@ -129,7 +129,7 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model"}
                     [$__range]))
                     or vector(0)
 
@@ -137,7 +137,7 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "Total Rate Limited Requests"
+          name: "Total rate limited"
           description: "Total rate-limited requests over the selected time window."
         plugin:
           kind: StatChart
@@ -167,7 +167,7 @@ spec:
       spec:
         display:
           description: "Percentage of authorized vs total requests over the selected time window."
-          name: Success Rate
+          name: Success rate
         plugin:
           kind: StatChart
           spec:
@@ -198,7 +198,7 @@ spec:
       kind: Panel
       spec:
         display:
-          name: "Token consumption"
+          name: "Token consumption chart"
           description: >-
             Tokens from successful requests (2xx) over time by model or subscription.
         plugin:
