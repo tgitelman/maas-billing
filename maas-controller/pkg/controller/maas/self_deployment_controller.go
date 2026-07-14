@@ -70,9 +70,9 @@ type LifecycleReconciler struct {
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
 	AITenantNamespace           string
+	GatewayNamespace            string
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
-	GatewayNamespace            string
 	EnvoyFilterManifestPath     string
 }
 
@@ -82,7 +82,7 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
-//+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -451,6 +451,7 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 // Uses the existing kustomize infrastructure to render manifests from ObservabilityManifestsPath.
 // If ObservabilityManifestsPath is not set or Perses CRDs are not installed, gracefully skips.
 func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr.Logger) error {
+	// Skip if observability manifests path not configured
 	if r.ObservabilityManifestsPath == "" {
 		log.Info("WARNING: Observability manifests path not configured; skipping observability dashboards")
 		return nil
@@ -480,6 +481,10 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 
 		if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
+				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
+				// installed by COO which may not be present yet). Skip so the rest of the
+				// platform manifests are applied and Tenant reconcile does not fail.
+				// The CRD watch will re-trigger reconcile once the CRDs appear.
 				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
 					"name", res.GetName(), "namespace", res.GetNamespace())
@@ -521,7 +526,7 @@ func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
 		}
-		return fmt.Errorf("delete usage-logs EnvoyFilter: %w", err)
+		return fmt.Errorf("failed to delete usage-logs EnvoyFilter: %w", err)
 	}
 	log.Info("deleted usage-logs EnvoyFilter (usageLogging disabled)")
 	return nil
