@@ -23,7 +23,7 @@ todos:
   content: "PRs #995 (admin dashboard) + #988 (user dashboard, closed): Perses usage dashboards with Loki LogQL, loki-query-proxy for user isolation"
   status: pending
 - id: multitenant-envoyfilter
-  content: "Per-tenant EnvoyFilter: Implemented on POC branch (2026-07-14). Moved from LifecycleReconciler to AITenantReconciler. Each tenant gets maas-model-access-logs-<tenant> targeting its gateway."
+  content: "Per-tenant EnvoyFilter: Implemented on POC branch (2026-07-14). Moved from LifecycleReconciler to AITenantReconciler. Each tenant gets maas-model-access-logs-<tenant> targeting its gateway. PR #1172 review fixes applied (2026-07-15): removed legacy cleanup, simplified Config watch, tightened RBAC, replaced ptrTo."
   status: done
 - id: pr999-proxy-fixes
   content: "PR #999 proxy bugs: HTTP/1.0 chunked mismatch, duplicate namespace filter, POST support, kustomize namespace override, RBAC gaps (see Proxy Issues section)"
@@ -60,7 +60,7 @@ POC branch rebased on `upstream/main` (42 upstream commits incorporated). All up
 
 **PR #1035 merged** (Jul 13) — EnvoyFilter for OTel structured usage logging. Controller-managed via `usageLogging` feature gate. Approved by ahadas + jrhyness.
 
-**Per-tenant EnvoyFilter implemented** (Jul 14, POC branch): Moved EnvoyFilter lifecycle from `LifecycleReconciler` into `AITenantReconciler`. Each AITenant gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) targeting its specific gateway. `AITenantReconciler` reads `Config` CR directly for `usageLogging` flag and watches Config changes to propagate toggles. Addresses jrhyness review comment on PR #1035.
+**Per-tenant EnvoyFilter implemented** (Jul 14, POC branch; review fixes Jul 15): Moved EnvoyFilter lifecycle from `LifecycleReconciler` into `AITenantReconciler`. Each AITenant gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) targeting its specific gateway. `AITenantReconciler` reads `Config` CR directly for `usageLogging` flag and watches Config changes to propagate toggles. Addresses jrhyness review comment on PR #1035. PR #1172 review by ahadas addressed: removed legacy cleanup, simplified Config watch predicate, tightened RBAC to `create;patch;delete`, Config NotFound returns nil instead of explicit delete.
 
 **Cluster aligned to `opendatahub` convention** (Jul 14): The PR #999 user-scoped proxy expects `kubernetes_namespace_name=opendatahub` for security scoping. Aligned the cluster:
 
@@ -135,13 +135,15 @@ All core components deployed and verified on clusters `amit.dev.datahub.redhat.c
 
 The EnvoyFilter is controller-managed via `Config.Spec.UsageLogging` (bool, default `false`). Cluster-wide toggle on the singleton `Config/default` CR.
 
-**Per-tenant EnvoyFilter (current implementation)**: Each `AITenant` gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) managed by `AITenantReconciler`:
+**Per-tenant EnvoyFilter (current implementation, updated 2026-07-15)**: Each `AITenant` gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) managed by `AITenantReconciler`:
 
 - **Enable** (`usageLogging: true`): reads EnvoyFilter YAML from container filesystem (`/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml`), templates collector address via `patchClusterAddress`, patches `spec.targetRefs[0].name` to the tenant's gateway (`patchEnvoyFilterTargetGateway`), names the resource `maas-model-access-logs-<tenant>`, sets `AITenant` ownerReference, server-side applies with `maas-controller` fieldOwner.
 - **Disable** (`usageLogging: false` or field absent): deletes the per-tenant EnvoyFilter if it exists.
-- **Config watch**: `AITenantReconciler.SetupWithManager` watches `Config` singleton. On change, `mapConfigToAITenants` enqueues all AITenants for re-reconciliation — this propagates `usageLogging` toggles immediately.
+- **Config watch**: `SetupWithManager` watches `Config` with `GenerationChangedPredicate`. `mapConfigToAITenants` enqueues all AITenants for re-reconciliation — propagates `usageLogging` toggles immediately.
+- **Config NotFound**: returns nil (no explicit delete) — if Config doesn't exist, the EnvoyFilter was never created.
 - **Cleanup on AITenant delete**: `deleteAITenantScopedChildren` removes the per-tenant EnvoyFilter during AITenant deletion.
 - **Graceful degradation**: skips if EnvoyFilter CRD not installed, manifest file not found, or `gatewayRef` not yet populated.
+- **RBAC**: `create;patch;delete` only (no `get;list;watch` — SSA apply doesn't need reads).
 
 `LifecycleReconciler.ensureObservability` no longer manages EnvoyFilters directly — only `ensureLimitadorServiceMonitor` and `ensureUsageDashboard` remain.
 
@@ -748,13 +750,20 @@ Found during deployment/testing on amit dev (2026-07-14). **No proxy code was mo
 3. **Loki infra in opendatahub-operator**: CA ConfigMap, ClusterRoleBinding, SA token Secret — platform-level resources for operator to provision.
 4. **`organization_id` not yet populated**: AuthPolicy missing `organizationId` property. Requires `maasauthpolicy_controller.go` change.
 5. **`PersesGlobalDatasource`**: Available in `v1alpha2`. Deploy `loki` and `scoped-loki` as global datasources.
-6. **Multi-tenant EnvoyFilter** (jrhyness, PR #1035 review): **Implemented on POC branch (2026-07-14)**. Moved EnvoyFilter lifecycle from `LifecycleReconciler` into `AITenantReconciler`. Each AITenant now gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) targeting its specific gateway via `spec.targetRefs`. Design decisions:
+6. **Multi-tenant EnvoyFilter** (jrhyness, PR #1035 review): **Implemented on POC branch (2026-07-14), review fixes applied (2026-07-15)**. Moved EnvoyFilter lifecycle from `LifecycleReconciler` into `AITenantReconciler`. Each AITenant now gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) targeting its specific gateway via `spec.targetRefs`. Design decisions:
    - **Reconciler**: `AITenantReconciler` — has direct access to `status.gatewayRef` and manages infrastructure resources.
    - **usageLogging flag**: `AITenantReconciler` reads the `Config` CR directly (cluster-scoped, no extra plumbing).
-   - **Config watch**: `AITenantReconciler.SetupWithManager` watches `Config` singleton changes and maps them to all AITenant reconcile requests.
+   - **Config watch**: `SetupWithManager` watches `Config` with `GenerationChangedPredicate` and fans out to all AITenants via `mapConfigToAITenants`.
    - **Cleanup on toggle-off**: Config change triggers re-reconciliation of all AITenants; each `AITenantReconciler` deletes its own EnvoyFilter when `usageLogging=false`.
    - **Cleanup on delete**: `deleteAITenantScopedChildren` deletes the per-tenant EnvoyFilter during AITenant deletion.
    - **LifecycleReconciler**: `ensureObservability` no longer manages EnvoyFilters (removed `ensureUsageLogsEnvoyFilter` call).
+   - **PR #1172 review fixes** (ahadas, 2026-07-15):
+     - Removed `deleteLegacyGlobalEnvoyFilter` — feature never released, no migration needed.
+     - Removed redundant Config name predicate in `SetupWithManager` — there's only one Config singleton.
+     - Config NotFound now returns nil (no explicit EnvoyFilter delete) — if Config doesn't exist, neither does the EnvoyFilter.
+     - RBAC marker tightened to `create;patch;delete` (SSA apply + delete only, no read verbs). Stale marker also removed from `self_deployment_controller.go`.
+     - Replaced local `ptrTo` helper with `ptr.To` in tests.
+     - Removed stale "tests moved" comment from `self_deployment_controller_test.go`.
 7. **PR #999 proxy bug fixes**: Address HTTP/1.0 chunked mismatch, duplicate namespace filter injection, POST support, kustomize namespace override, and RBAC gaps (see "Proxy Issues" section).
 8. **OTel Collector CR namespace alignment**: Update `service.namespace` and `kubernetes_namespace_name` in PR #1032 from `openshift-ingress` to `opendatahub` before merging.
 
