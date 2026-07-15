@@ -23,7 +23,7 @@ todos:
   content: "PRs #995 (admin dashboard) + #988 (user dashboard, closed): Perses usage dashboards with Loki LogQL, loki-query-proxy for user isolation"
   status: pending
 - id: multitenant-envoyfilter
-  content: "Per-tenant EnvoyFilter: Implemented on POC branch (2026-07-14). Moved from LifecycleReconciler to AITenantReconciler. Each tenant gets maas-model-access-logs-<tenant> targeting its gateway. PR #1172 review fixes applied (2026-07-15): removed legacy cleanup, simplified Config watch, tightened RBAC, replaced ptrTo."
+  content: "Per-tenant EnvoyFilter: Implemented on POC branch (2026-07-14). Moved from LifecycleReconciler to AITenantReconciler. Each tenant gets maas-model-access-logs-<tenant> targeting its gateway. PR #1172 review fixes applied (2026-07-15, 2 rounds): removed legacy cleanup, simplified Config watch, tightened RBAC, replaced ptrTo, adopted load-then-delete-or-patch pattern (#1032), Config NotFound cleanup, cross-namespace ownership documented."
   status: done
 - id: pr999-proxy-fixes
   content: "PR #999 proxy bugs: HTTP/1.0 chunked mismatch, duplicate namespace filter, POST support, kustomize namespace override, RBAC gaps (see Proxy Issues section)"
@@ -60,7 +60,7 @@ POC branch rebased on `upstream/main` (42 upstream commits incorporated). All up
 
 **PR #1035 merged** (Jul 13) — EnvoyFilter for OTel structured usage logging. Controller-managed via `usageLogging` feature gate. Approved by ahadas + jrhyness.
 
-**Per-tenant EnvoyFilter implemented** (Jul 14, POC branch; review fixes Jul 15): Moved EnvoyFilter lifecycle from `LifecycleReconciler` into `AITenantReconciler`. Each AITenant gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) targeting its specific gateway. `AITenantReconciler` reads `Config` CR directly for `usageLogging` flag and watches Config changes to propagate toggles. Addresses jrhyness review comment on PR #1035. PR #1172 review by ahadas addressed: removed legacy cleanup, simplified Config watch predicate, tightened RBAC to `create;patch;delete`, Config NotFound returns nil instead of explicit delete.
+**Per-tenant EnvoyFilter implemented** (Jul 14, POC branch; review fixes Jul 15, 2 rounds): Moved EnvoyFilter lifecycle from `LifecycleReconciler` into `AITenantReconciler`. Each AITenant gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) targeting its specific gateway. `AITenantReconciler` reads `Config` CR directly for `usageLogging` flag and watches Config changes to propagate toggles. Addresses jrhyness review comment on PR #1035. PR #1172 review by ahadas — round 1: removed legacy cleanup, simplified Config watch predicate, tightened RBAC to `create;patch;delete`. Round 2: adopted load-then-delete-or-patch pattern (from #1032), Config NotFound now cleans up stale EnvoyFilters, fixed doc comments, documented cross-namespace ownership limitation.
 
 **Cluster aligned to `opendatahub` convention** (Jul 14): The PR #999 user-scoped proxy expects `kubernetes_namespace_name=opendatahub` for security scoping. Aligned the cluster:
 
@@ -140,8 +140,10 @@ The EnvoyFilter is controller-managed via `Config.Spec.UsageLogging` (bool, defa
 - **Enable** (`usageLogging: true`): reads EnvoyFilter YAML from container filesystem (`/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml`), templates collector address via `patchClusterAddress`, patches `spec.targetRefs[0].name` to the tenant's gateway (`patchEnvoyFilterTargetGateway`), names the resource `maas-model-access-logs-<tenant>`, sets `AITenant` ownerReference, server-side applies with `maas-controller` fieldOwner.
 - **Disable** (`usageLogging: false` or field absent): deletes the per-tenant EnvoyFilter if it exists.
 - **Config watch**: `SetupWithManager` watches `Config` with `GenerationChangedPredicate`. `mapConfigToAITenants` enqueues all AITenants for re-reconciliation — propagates `usageLogging` toggles immediately.
-- **Config NotFound**: returns nil (no explicit delete) — if Config doesn't exist, the EnvoyFilter was never created.
+- **Load-then-delete-or-patch**: Manifest is always loaded first (same pattern as OTel Collector in PR #1032), then either deleted or applied based on the feature gate.
+- **Config NotFound**: deletes existing EnvoyFilter via `deleteEnvoyFilterIfExists` — cleans up stale resources if Config is removed.
 - **Cleanup on AITenant delete**: `deleteAITenantScopedChildren` removes the per-tenant EnvoyFilter during AITenant deletion.
+- **Cross-namespace ownership**: OwnerReference not possible (AITenant in `ai-tenants`, EnvoyFilter in gateway namespace). Cleanup relies on explicit deletion + annotation-based tracking.
 - **Graceful degradation**: skips if EnvoyFilter CRD not installed, manifest file not found, or `gatewayRef` not yet populated.
 - **RBAC**: `create;patch;delete` only (no `get;list;watch` — SSA apply doesn't need reads).
 
@@ -154,8 +156,8 @@ Files changed (original EnvoyFilter PR #1035, merged):
 - `deployment/base/maas-controller/crd/bases/maas.opendatahub.io_configs.yaml` — added `usageLogging` field
 
 Files changed (per-tenant EnvoyFilter, POC branch):
-- `maas-controller/pkg/controller/maas/aitenant_controller.go` — `ensureUsageLogsEnvoyFilter`, `applyUsageLogsEnvoyFilter`, `deleteUsageLogsEnvoyFilter`, `patchEnvoyFilterTargetGateway`; Config watch in `SetupWithManager` + `mapConfigToAITenants`; EnvoyFilter cleanup in `deleteAITenantScopedChildren`; RBAC marker for `networking.istio.io/envoyfilters`
-- `maas-controller/pkg/controller/maas/aitenant_controller_test.go` — unit tests for per-tenant EnvoyFilter (create, delete, disabled, no gateway ref)
+- `maas-controller/pkg/controller/maas/aitenant_controller.go` — `ensureUsageLogsEnvoyFilter` (load-then-delete-or-patch pattern), `deleteEnvoyFilterIfExists`, `patchEnvoyFilterTargetGateway`; Config watch in `SetupWithManager` + `mapConfigToAITenants`; EnvoyFilter cleanup in `deleteAITenantScopedChildren`; RBAC marker for `networking.istio.io/envoyfilters`
+- `maas-controller/pkg/controller/maas/aitenant_controller_test.go` — unit tests for per-tenant EnvoyFilter (create, delete, disabled, no gateway ref, Config not found)
 - `maas-controller/pkg/platform/tenantreconcile/constants.go` — `UsageLogsEnvoyFilterName` naming function
 - `maas-controller/pkg/controller/maas/self_deployment_controller.go` — removed `ensureUsageLogsEnvoyFilter`, `applyUsageLogsEnvoyFilter`, `deleteEnvoyFilterIfExists`, `envoyFilterName` constant, `EnvoyFilterManifestPath` struct field
 - `maas-controller/pkg/controller/maas/self_deployment_controller_test.go` — removed old EnvoyFilter tests (moved to aitenant_controller_test.go)
@@ -757,13 +759,18 @@ Found during deployment/testing on amit dev (2026-07-14). **No proxy code was mo
    - **Cleanup on toggle-off**: Config change triggers re-reconciliation of all AITenants; each `AITenantReconciler` deletes its own EnvoyFilter when `usageLogging=false`.
    - **Cleanup on delete**: `deleteAITenantScopedChildren` deletes the per-tenant EnvoyFilter during AITenant deletion.
    - **LifecycleReconciler**: `ensureObservability` no longer manages EnvoyFilters (removed `ensureUsageLogsEnvoyFilter` call).
-   - **PR #1172 review fixes** (ahadas, 2026-07-15):
+   - **PR #1172 review fixes — round 1** (ahadas, 2026-07-15):
      - Removed `deleteLegacyGlobalEnvoyFilter` — feature never released, no migration needed.
      - Removed redundant Config name predicate in `SetupWithManager` — there's only one Config singleton.
-     - Config NotFound now returns nil (no explicit EnvoyFilter delete) — if Config doesn't exist, neither does the EnvoyFilter.
      - RBAC marker tightened to `create;patch;delete` (SSA apply + delete only, no read verbs). Stale marker also removed from `self_deployment_controller.go`.
      - Replaced local `ptrTo` helper with `ptr.To` in tests.
      - Removed stale "tests moved" comment from `self_deployment_controller_test.go`.
+   - **PR #1172 review fixes — round 2** (ahadas, 2026-07-15):
+     - Adopted load-then-delete-or-patch pattern from PR #1032: manifest always loaded first, then deleted or applied. Merged `applyUsageLogsEnvoyFilter` + `deleteUsageLogsEnvoyFilter` into unified `ensureUsageLogsEnvoyFilter` + `deleteEnvoyFilterIfExists`.
+     - Config NotFound now cleans up stale EnvoyFilters via `deleteEnvoyFilterIfExists` (was returning nil — could leave orphans).
+     - Fixed `mapConfigToAITenants` doc comment — no longer implies Config CR is passed to the function.
+     - Documented cross-namespace ownership limitation (AITenant in `ai-tenants`, EnvoyFilter in gateway namespace — OwnerReference not possible). Cleanup relies on explicit deletion + annotation-based tracking.
+     - Added test: "Config not found — deletes existing EnvoyFilter".
 7. **PR #999 proxy bug fixes**: Address HTTP/1.0 chunked mismatch, duplicate namespace filter injection, POST support, kustomize namespace override, and RBAC gaps (see "Proxy Issues" section).
 8. **OTel Collector CR namespace alignment**: Update `service.namespace` and `kubernetes_namespace_name` in PR #1032 from `openshift-ingress` to `opendatahub` before merging.
 
