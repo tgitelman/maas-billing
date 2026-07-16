@@ -1,9 +1,0 @@
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-metadata:
-  name: maas-otel-collector
-
-resources:
-  - otel-collector-rbac.yaml
-  - otel-collector-cr.yaml
-  - ../usage-logs/envoy-otel-access-log.yaml

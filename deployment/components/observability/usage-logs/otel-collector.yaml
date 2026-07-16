@@ -1,0 +1,102 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: usage-logs-service-ca
+  namespace: opendatahub
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-controller
+---
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: usage-logs
+  namespace: opendatahub
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-controller
+spec:
+  replicas: 2
+  resources:
+    limits:
+      cpu: '1'
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  env:
+  - name: NAMESPACE
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.namespace
+  volumeMounts:
+  - name: service-ca
+    mountPath: /etc/pki/ca-trust/extracted/pem
+    readOnly: true
+  volumes:
+  - name: service-ca
+    configMap:
+      name: usage-logs-service-ca
+  config:
+    extensions:
+      bearertokenauth:
+        filename: /var/run/secrets/kubernetes.io/serviceaccount/token
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+    processors:
+      batch: {}
+      resource:
+        attributes:
+        - key: log_type
+          value: application
+          action: upsert
+        - key: service.name
+          value: maas-gateway
+          action: upsert
+        - key: kubernetes_namespace_name
+          value: "${env:NAMESPACE}"
+          action: upsert
+      transform:
+        error_mode: ignore
+        log_statements:
+          - context: log
+            statements:
+              - replace_pattern(attributes["user_id"], "\"", "")
+              - replace_pattern(attributes["subscription"], "\"", "")
+              - replace_pattern(attributes["key_id"], "\"", "")
+              - replace_pattern(attributes["key_name"], "\"", "")
+              - replace_pattern(attributes["groups"], "\"", "")
+              - replace_pattern(attributes["organization_id"], "\"", "")
+      groupbyattrs:
+        keys:
+        - subscription
+        - model
+        - response_type
+        - key_id
+        - organization_id
+    exporters:
+      otlp_http/loki:
+        endpoint: "https://maas-loki-gateway-http.opendatahub.svc.cluster.local:8080/api/logs/v1/application/otlp"
+        auth:
+          authenticator: bearertokenauth
+        tls:
+          ca_file: /etc/pki/ca-trust/extracted/pem/service-ca.crt
+    service:
+      extensions:
+        - bearertokenauth
+      pipelines:
+        logs:
+          receivers:
+          - otlp
+          processors:
+          - resource
+          - batch
+          - transform
+          - groupbyattrs
+          exporters:
+          - otlp_http/loki

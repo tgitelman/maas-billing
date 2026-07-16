@@ -20,7 +20,7 @@ todos:
   content: "PR #1032: OTel Collector CR (v1beta1) + RBAC. Branch: feature/otel-collector. Requires Red Hat build of OTel operator. memory_limiter, error_mode:ignore, sending_queue, user_id emission toggle. Needs namespace alignment (openshift-ingress → opendatahub) before merging."
   status: pending
 - id: pr-dashboards
-  content: "PRs #995 (admin dashboard) + #988 (user dashboard, closed): Perses usage dashboards with Loki LogQL, loki-query-proxy for user isolation"
+  content: "PR #995 (admin + user dashboards, combined): Both Perses dashboards merged into single PR. PR #988 closed. All files under observability/dashboards/. POC branch aligned (2026-07-16)."
   status: pending
 - id: multitenant-envoyfilter
   content: "Per-tenant EnvoyFilter: Implemented on POC branch (2026-07-14). Moved from LifecycleReconciler to AITenantReconciler. Each tenant gets maas-model-access-logs-<tenant> targeting its gateway. PR #1172 review fixes applied (2026-07-15, 2 rounds): removed legacy cleanup, simplified Config watch, tightened RBAC, replaced ptrTo, adopted load-then-delete-or-patch pattern (#1032), Config NotFound cleanup, cross-namespace ownership documented."
@@ -166,9 +166,9 @@ Files changed (per-tenant EnvoyFilter, POC branch):
 
 **EnvoyFilter** (`maas-model-access-logs`): Composite filter wrapping native `json_to_metadata` with path-based suffix matching (`:path` ends with `/v1/chat/completions` or `/v1/completions`) + companion Lua SSE filter. Non-inference requests skip body parsing entirely. Non-streaming: `json_to_metadata` extracts model/tokens from JSON body. Streaming SSE: companion Lua filter uses `bodyChunks()` to iterate chunks without buffering, extracts tokens from the final SSE event (requires model server to provide `usage` in final chunk via `stream_options.include_usage=true` or `--enable-force-include-usage`). `INSERT_FIRST` for 429 model preservation. CEL filter for inference-only POST logging. `response_type` classification (`hit`/`rate_limit`/`error`). All identity from FILTER_STATE (`wasm.kuadrant.auth.identity.*`). 12 attributes per log record.
 
-**OTel Collector**: `OpenTelemetryCollector` CR (v1beta1) in `opendatahub` namespace via Red Hat build of OpenTelemetry operator. Replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` (strip WASM quotes, `error_mode: ignore`) → `transform/redact` → `groupbyattrs` (8 stream labels) → `batch` → Loki (`sending_queue` enabled). `user_id` sensitive data emission disabled by default (toggleable via 2-line comment swap in CR).
+**OTel Collector**: `OpenTelemetryCollector` CR (v1beta1) in `opendatahub` namespace via Red Hat build of OpenTelemetry operator (PR #1032). Files in `usage-logs/otel-collector.yaml` + `otel-collector-rbac.yaml`. Pipeline: `resource` → `batch` → `transform` (strip WASM quotes, `error_mode: ignore`) → `groupbyattrs` (5 stream labels) → Loki.
 
-**Dashboards**: Two Perses dashboards in `kuadrant-system` using `response_type` stream labels for efficient querying. LokiStack patched for explicit stream label control.
+**Dashboards**: Two Perses dashboards in `opendatahub` namespace (PR #995, combined) using `response_type` stream labels for efficient querying. All files in `observability/dashboards/`. LokiStack patched for explicit stream label control.
 
 ---
 
@@ -294,11 +294,11 @@ flowchart LR
 
 ### Perses Dashboard Architecture
 
-Two dashboards in `kuadrant-system` namespace:
+Two dashboards in `opendatahub` namespace (PR #995, combined):
 - **`usage-admin-loki-dashboard`** — admin view, all users, uses `loki` datasource (direct to LokiStack). Dynamic dropdowns for User, Subscription, Model via `LokiLabelValuesVariable`. `key_name` shown in table via structured metadata grouping (not a dropdown — high cardinality).
 - **`usage-user-loki-dashboard`** — per-user view, uses `scoped-loki` datasource (through loki-query-proxy). Dynamic dropdowns for Subscription, Model. `key_name` shown in table via structured metadata grouping.
 
-Two datasources in `kuadrant-system` namespace:
+Two datasources in `opendatahub` namespace (PR #995, combined):
 - **`loki`** — direct to LokiStack gateway (SA token auth + kubernetesAuth + TLS)
 - **`scoped-loki`** — routes through loki-query-proxy (kubernetesAuth only, no TLS/secret)
 
@@ -315,8 +315,8 @@ Two datasources in `kuadrant-system` namespace:
 
 | Namespace | Resources |
 |-----------|-----------|
-| `kuadrant-system` | loki-query-proxy (deployment, SA, RBAC, service), Perses dashboards (usage-admin-loki-dashboard, usage-user-loki-dashboard), datasources (loki, scoped-loki) |
-| `opendatahub` | OpenTelemetryCollector CR `usage-logs` (operator-managed → service `usage-logs-collector`), SA `usage-logs-collector`, ClusterRoleBinding `maas-otel-loki-writer` |
+| `kuadrant-system` | loki-query-proxy (deployment, SA, RBAC, service) — `usage-logs/tenancy-proxy-*.yaml` |
+| `opendatahub` | Perses dashboards + datasources (`observability/dashboards/`), OpenTelemetryCollector CR `usage-logs` + service-ca ConfigMap + ClusterRoleBinding `usage-logs-writer` (`usage-logs/otel-collector*.yaml`) |
 | `openshift-ingress` | EnvoyFilter `maas-model-access-logs` |
 | `openshift-logging` | LokiStack `maas-loki` (patched `streamLabels.resourceAttributes`), NetworkPolicy allowing collector from `opendatahub` |
 | `openshift-operators` | Red Hat build of OpenTelemetry operator (Subscription `opentelemetry-product`) |
@@ -389,11 +389,11 @@ The monitoring-console-plugin uses prefix matching on datasource names (`OcpData
 | File | Change |
 | --- | --- |
 | `deployment/components/observability/usage-logs/envoy-otel-access-log.yaml` | EnvoyFilter `maas-model-access-logs`: OTel ALS cluster + `json_to_metadata` + Lua SSE companion (`bodyChunks()`) + CEL-filtered access log (12 attributes). |
-| `deployment/components/observability/otel-collector/otel-collector-cr.yaml` | `OpenTelemetryCollector` CR (v1beta1) — replaces raw Deployment+ConfigMap+Service. Pipeline: `memory_limiter` → `resource` → `transform` → `groupbyattrs` → `batch` → Loki. Includes `transform/redact` (toggleable user_id removal), `sending_queue`, `error_mode: ignore`. Requires Red Hat build of OTel operator. |
-| `deployment/components/observability/otel-collector/otel-collector-rbac.yaml` | SA `usage-logs-collector` + ClusterRole + ClusterRoleBinding for Loki write access (namespace: `opendatahub`) |
-| `deployment/components/observability/otel-collector/kustomization.yaml` | Kustomization: otel-collector-rbac.yaml + otel-collector-cr.yaml + envoy-otel-access-log.yaml |
-| `deployment/components/observability/usage-logs/` | Loki query proxy (Python source ConfigMap, deployment, RBAC, service) — PR #999 (replaces `loki-proxy/` Go version) |
-| `deployment/components/observability/observability/dashboards/` | Perses dashboards (usage-admin, usage-user), datasources (loki, scoped-loki), kustomization — PRs #995, #988 |
+| `deployment/components/observability/usage-logs/otel-collector.yaml` | `OpenTelemetryCollector` CR (v1beta1) + service-ca ConfigMap. PR #1032. |
+| `deployment/components/observability/usage-logs/otel-collector-rbac.yaml` | ClusterRoleBinding for Loki write access (namespace: `opendatahub`). PR #1032. |
+| `deployment/components/observability/usage-logs/tenancy-proxy-*.yaml` | Loki query proxy (Python source ConfigMap, deployment, RBAC, service) — PR #999. |
+| `deployment/components/observability/usage-logs/kustomization.yaml` | Kustomization: OTel collector + proxy resources. Combined from PRs #1032 + #999. |
+| `deployment/components/observability/observability/dashboards/` | Perses dashboards (usage-admin, usage-user), datasources (loki, scoped-loki), kustomization — PR #995 (combined) |
 | `deployment/base/observability/telemetry-policy.yaml` | TelemetryPolicy (subscription, model, organization_id, cost_center) |
 | `scripts/observability/install-observability.sh` | OTel Collector deploy: kustomize build + sed substitution |
 
@@ -445,64 +445,49 @@ Resource attributes: `service.name=maas-gateway`, `service.namespace=opendatahub
 
 ### OTel Collector Configuration
 
-Deployed as `OpenTelemetryCollector` CR (`v1beta1`) named `usage-logs` via Red Hat build of OpenTelemetry operator. The operator manages Deployment, Service (`usage-logs-collector`, convention: `<cr-name>-collector`), health probes, and config volume automatically.
+Deployed as `OpenTelemetryCollector` CR (`v1beta1`) named `usage-logs` in `opendatahub` via Red Hat build of OpenTelemetry operator (PR #1032). Files: `usage-logs/otel-collector.yaml` + `usage-logs/otel-collector-rbac.yaml`. The operator manages Deployment, Service (`usage-logs-collector`, convention: `<cr-name>-collector`), health probes, and config volume automatically.
 
 **Prerequisite**: Red Hat build of OpenTelemetry operator installed via OperatorHub (`opentelemetry-product` Subscription in `openshift-operators`).
 
 ```yaml
 processors:
-  memory_limiter:
-    check_interval: 5s
-    limit_percentage: 80
-    spike_limit_percentage: 25
   resource:
     attributes:
-    - { action: insert, key: log_type, value: application }
+    - { action: upsert, key: log_type, value: application }
     - { action: upsert, key: service.name, value: maas-gateway }
-    - { action: upsert, key: service.namespace, value: opendatahub }
-    - { action: upsert, key: kubernetes_namespace_name, value: opendatahub }
-    - { action: upsert, key: service.instance.id, value: "${env:POD_NAME}" }
+    - { action: upsert, key: kubernetes_namespace_name, value: "${env:NAMESPACE}" }
   transform:
     error_mode: ignore
     log_statements:
     - context: log
       statements:
-      - replace_pattern(attributes["user_id"], "^\"(.*)\"$$", "$$1")
-      - replace_pattern(attributes["subscription"], "^\"(.*)\"$$", "$$1")
-      - replace_pattern(attributes["key_id"], "^\"(.*)\"$$", "$$1")
-      - replace_pattern(attributes["key_name"], "^\"(.*)\"$$", "$$1")
-      - replace_pattern(attributes["groups"], "^\"(.*)\"$$", "$$1")
-      - replace_pattern(attributes["organization_id"], "^\"(.*)\"$$", "$$1")
-  transform/redact:
-    error_mode: ignore
-    log_statements:
-    - context: log
-      statements:
-      - delete_key(attributes, "user_id")
+      - replace_pattern(attributes["user_id"], "\"", "")
+      - replace_pattern(attributes["subscription"], "\"", "")
+      - replace_pattern(attributes["key_id"], "\"", "")
+      - replace_pattern(attributes["key_name"], "\"", "")
+      - replace_pattern(attributes["groups"], "\"", "")
+      - replace_pattern(attributes["organization_id"], "\"", "")
   groupbyattrs:
-    keys: [subscription, model, response_type, method, user_id, key_id, key_name, organization_id]
-  batch:
-    timeout: 5s
-    send_batch_size: 100
-    send_batch_max_size: 200
+    keys: [subscription, model, response_type, key_id, organization_id]
+  batch: {}
 exporters:
-  otlphttp/loki:
-    sending_queue:
-      enabled: true
-      num_consumers: 4
-      queue_size: 500
+  otlp_http/loki:
+    endpoint: "https://maas-loki-gateway-http.opendatahub.svc.cluster.local:8080/api/logs/v1/application/otlp"
+    auth:
+      authenticator: bearertokenauth
+    tls:
+      ca_file: /etc/pki/ca-trust/extracted/pem/service-ca.crt
 ```
 
 **Key configuration points**:
-- `memory_limiter` is FIRST in the pipeline — OTel Collector best practice to prevent OOM under burst traffic.
-- `error_mode: ignore` on `transform` processors — malformed attributes silently skip the statement instead of dropping the entire log record.
+- `error_mode: ignore` on `transform` — malformed attributes silently skip the statement instead of dropping the entire log record.
 - `transform` strips double-quotes from 6 identity attributes (WASM shim wraps some values in quotes).
-- `user_id` emission (**disabled by default**) — `transform/redact` deletes `user_id` from log attributes before Loki. To enable emission, uncomment `delete_key` in `transform/redact` and `user_id` in `groupbyattrs.keys` (2-line toggle in CR). Dashboard variables use `customAllValue: ".*"` so `user_id=~".*"` matches all entries regardless of whether `user_id` is present — admin "All" returns correct totals.
-- `groupbyattrs` promotes 8 keys from log attributes to resource attributes — these become Loki stream labels (controlled by LokiStack `streamLabels.resourceAttributes`).
+- `groupbyattrs` promotes 5 keys from log attributes to resource attributes — these become Loki stream labels (controlled by LokiStack `streamLabels.resourceAttributes`).
 - `response_type` (not `response_code`) is a stream label — low cardinality (`hit`/`rate_limit`/`error`), enables efficient Loki filtering.
-- `sending_queue` decouples collection from export — Loki slowdowns don't backpressure the receiver.
-- Loki endpoint via `sed` placeholder at deploy time.
+- `kubernetes_namespace_name` set via `${env:NAMESPACE}` (pod's namespace).
+- Service-ca ConfigMap with `service.beta.openshift.io/inject-cabundle: "true"` for TLS to LokiStack gateway.
 - CR named `usage-logs` deployed in `opendatahub` namespace. Operator generates service named `usage-logs-collector` (convention: `<cr-name>-collector`).
+- Pipeline: `resource` → `batch` → `transform` → `groupbyattrs` → `otlp_http/loki`.
 
 ### Final Envoy Filter Chain
 
@@ -691,13 +676,13 @@ Proxy deploys to `kuadrant-system` by default. OTel Collector CR `usage-logs` ge
 | [#1035](https://github.com/opendatahub-io/models-as-a-service/pull/1035) EnvoyFilter | `feature/envoy-otel-log-jsontometa` | **Merged** (Jul 13) | Composite filter + Lua SSE + controller integration (`usageLogging` feature gate). 12 attributes, all identity from FILTER_STATE. **Follow-up**: per-tenant gateway EnvoyFilter (jrhyness). | 7 files, 682 lines | OTel Collector on port 4317 |
 | [#1032](https://github.com/opendatahub-io/models-as-a-service/pull/1032) OTel Collector CR | `feature/otel-collector` | Open (draft) | `OpenTelemetryCollector` CR + RBAC. **Note**: `service.namespace` and `kubernetes_namespace_name` in CR still default to `openshift-ingress` — should update to `opendatahub` before merging. | 2 files (CR + RBAC) | EnvoyFilter PR (merged). OTel operator. LokiStack. |
 | [#999](https://github.com/opendatahub-io/models-as-a-service/pull/999) Loki Query Proxy | `feature/loki-user-proxy` | Open | Python proxy (stdlib-only, ubi9): TokenReview auth, `inject_user_filter` (`kubernetes_namespace_name=opendatahub` + `user_id`). **Deployed and verified** on amit dev — user isolation works. See "Proxy Issues" section. | 4 files, 684 lines | None (standalone) |
-| [#995](https://github.com/opendatahub-io/models-as-a-service/pull/995) Admin Dashboard | `feature-loki-admin-dashboard` | Open | Admin usage dashboard + `loki` datasource (direct to LokiStack). `LokiLabelValuesVariable` (COO 1.5+). `customAllValue: ".*"` for absent-label matching. `response_type` stream labels. | 3 files | LokiStack + OTel pipeline deployed. Loki infra provisioned by opendatahub-operator. |
-| [#988](https://github.com/opendatahub-io/models-as-a-service/pull/988) User Dashboard | `feature/loki-user-dashboard` | **Closed** | User-scoped dashboard + `scoped-loki` datasource (through proxy). `LokiLabelValuesVariable`. `customAllValue: ".*"`. | 3 files | Proxy PR (#999). |
+| [#995](https://github.com/opendatahub-io/models-as-a-service/pull/995) Dashboards | `feature-loki-admin-dashboard` | Open | Admin + user-scoped dashboards combined (2026-07-16). Admin: direct `loki` datasource, user/subscription/model dropdowns, active users panel. User: `scoped-loki` datasource through proxy, auto-filtered by user identity. All files in `observability/dashboards/`. | 5 files | LokiStack + OTel pipeline. User dashboard requires Proxy (#999). |
+| [#988](https://github.com/opendatahub-io/models-as-a-service/pull/988) User Dashboard | `feature/loki-user-dashboard` | **Closed** | Merged into #995. | — | — |
 | [#1031](https://github.com/opendatahub-io/models-as-a-service/pull/1031) EnvoyFilter (Lua) | `feature/envoy-otel-access-log-filter` | **Closed** | Superseded by #1035 (json_to_metadata). Original Lua-only implementation. | — | — |
 
-**Merge order**: ~~EnvoyFilter~~ (merged) → OTel Collector → Proxy (#999) → Admin Dashboard (#995) → User Dashboard (#988).
+**Merge order**: ~~EnvoyFilter~~ (merged) → OTel Collector → Proxy (#999) → Dashboards (#995).
 
-**Note**: Admin Dashboard and Proxy are independent (no code dependency), but User Dashboard requires Proxy (datasource URL points to proxy service). All three dashboard/proxy PRs require the OTel pipeline to be deployed for Loki data to exist.
+**Note**: Admin dashboard and Proxy are independent (no code dependency), but user dashboard requires Proxy (scoped-loki datasource points to proxy service). Dashboard PR requires the OTel pipeline to be deployed for Loki data to exist.
 
 ### PR #1035 Review — Resolved and Merged (2026-07-13)
 

@@ -10,7 +10,6 @@ resources:
   - loki-ca.yaml
   - loki-rbac.yaml
   - loki-secret.yaml
-  - loki-datasource-scoped.yaml
 
 labels:
   - pairs:
