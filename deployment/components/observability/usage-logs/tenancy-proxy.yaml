@@ -4,20 +4,20 @@ metadata:
   name: usage-logs-tenancy-proxy
   namespace: opendatahub
   labels:
-    app: usage-tenancy-proxy
+    app: loki-query-proxy
     app.kubernetes.io/managed-by: maas-controller
-    app.kubernetes.io/component: usage-tenancy-proxy
+    app.kubernetes.io/component: loki-proxy
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: usage-tenancy-proxy
+      app: loki-query-proxy
   template:
     metadata:
       labels:
-        app: usage-tenancy-proxy
+        app: loki-query-proxy
     spec:
-      serviceAccountName: usage-tenancy-proxy
+      serviceAccountName: loki-query-proxy
       securityContext:
         runAsNonRoot: true
         fsGroup: 1001
@@ -84,7 +84,7 @@ spec:
       volumes:
       - name: proxy-source
         configMap:
-          name: usage-tenancy-proxy-source
+          name: loki-query-proxy-source
       - name: tls-cert
         secret:
           secretName: usage-logs-tenancy-proxy-tls
@@ -105,7 +105,7 @@ metadata:
     service.beta.openshift.io/inject-cabundle: "true"
   labels:
     app.kubernetes.io/managed-by: maas-controller
-    app.kubernetes.io/component: usage-tenancy-proxy
+    app.kubernetes.io/component: loki-proxy
 ---
 apiVersion: v1
 kind: Service
@@ -113,9 +113,9 @@ metadata:
   name: usage-logs-tenancy-proxy
   namespace: opendatahub
   labels:
-    app: usage-tenancy-proxy
+    app: loki-query-proxy
     app.kubernetes.io/managed-by: maas-controller
-    app.kubernetes.io/component: usage-tenancy-proxy
+    app.kubernetes.io/component: loki-proxy
   annotations:
     service.beta.openshift.io/serving-cert-secret-name: usage-logs-tenancy-proxy-tls
 spec:
@@ -126,4 +126,4 @@ spec:
     protocol: TCP
     name: https
   selector:
-    app: usage-tenancy-proxy
+    app: loki-query-proxy
