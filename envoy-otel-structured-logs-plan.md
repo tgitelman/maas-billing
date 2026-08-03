@@ -23,7 +23,7 @@ todos:
   content: "PR #995 superseded by PR #1203 (dashboards + proxy + OTel combined). PR #1203 MERGED (2026-07-23). Follow-up PRs: feature/step-fix (chart [2h] fix), feature/user-dropdown-pop (LokiLogQLVariable user dropdown)."
   status: done
 - id: multitenant-envoyfilter
-  content: "Per-tenant EnvoyFilter: PR #1251 (supersedes #1172). Clean reimplementation from upstream/main with all review feedback incorporated. Moved from LifecycleReconciler to AITenantReconciler. Each tenant gets maas-model-access-logs-<tenant> targeting its gateway. envoyFilterTenantID helper, RBAC get verb, cross-namespace OwnerRef documented, transient delete errors returned. 228 lines of tests."
+  content: "Per-tenant EnvoyFilter: PR #1251 (supersedes #1172). Rebased on upstream/main (2026-08-03) after #1292 bootstrap race fix, #1272 MaasTenantConfig readiness gate, and #1295 payload-processing priority landed. Reimplemented atop new AITenantReconciler structure: EF step placed after tenantConfigReady gate (gateway guaranteed to exist), Config watch coexists with MaasTenantConfig watch (not replaces), cleanup in reconcileAITenantDelete after deleteAITenantScopedChildren. Each tenant gets maas-model-access-logs-<tenant> targeting its gateway. envoyFilterTenantID helper, RBAC get;create;patch;delete, mapConfigToAITenants namespace-scoped, cross-namespace OwnerRef documented, transient delete errors returned. 228 lines of tests. 6 files, +418/-211."
   status: done
 - id: pr999-proxy-fixes
   content: "PR #999 proxy bugs: HTTP/1.0 chunked mismatch, duplicate namespace filter, POST support, kustomize namespace override, RBAC gaps (see Proxy Issues section)"
@@ -170,13 +170,14 @@ All core components deployed and verified on clusters `amit.dev.datahub.redhat.c
 
 The EnvoyFilter is controller-managed via `Config.Spec.UsageLogging` (bool, default `false`). Cluster-wide toggle on the singleton `Config/default` CR.
 
-**Per-tenant EnvoyFilter (PR #1251, updated 2026-07-23)**: Each `AITenant` gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) managed by `AITenantReconciler`:
+**Per-tenant EnvoyFilter (PR #1251, rebased 2026-08-03)**: Each `AITenant` gets its own EnvoyFilter (`maas-model-access-logs-<tenant>`) managed by `AITenantReconciler`:
 
 - **Enable** (`usageLogging: true`): reads EnvoyFilter YAML from container filesystem (`/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml`), templates collector address via `patchClusterAddress`, patches `spec.targetRefs[0].name` to the tenant's gateway (`patchEnvoyFilterTargetGateway`), names the resource via `UsageLogsEnvoyFilterName(envoyFilterTenantID(aitenant))`, sets Config ownerReference (cross-namespace, documented), server-side applies with `maas-controller` fieldOwner.
 - **Disable** (`usageLogging: false` or field absent): deletes the per-tenant EnvoyFilter if it exists.
-- **Config watch**: `SetupWithManager` watches `Config` with `GenerationChangedPredicate`. `mapConfigToAITenants` lists AITenants in the configured namespace and enqueues them — propagates `usageLogging` toggles immediately.
+- **Reconcile placement**: `ensureUsageLogsEnvoyFilter` runs **after** `tenantConfigReady` gate (added by #1292/#1272) — gateway is guaranteed to exist and tenant is fully bootstrapped before EF creation. This is safer than the original placement (before the Active phase) because it avoids creating orphan EFs for stuck tenants.
+- **Config watch**: `SetupWithManager` watches `Config` with `GenerationChangedPredicate` **alongside** the existing `MaasTenantConfig` watch (from #1272). `mapConfigToAITenants` lists AITenants in the configured namespace and enqueues them — propagates `usageLogging` toggles immediately.
 - **Config NotFound**: deletes existing EnvoyFilter via `deleteEnvoyFilterIfExists` — cleans up stale resources if Config is removed.
-- **Cleanup on AITenant delete**: `reconcileAITenantDelete` removes the per-tenant EnvoyFilter. Transient errors are returned for retry; only NotFound/CRD-not-installed are swallowed.
+- **Cleanup on AITenant delete**: `reconcileAITenantDelete` removes the per-tenant EnvoyFilter after `deleteAITenantScopedChildren`. Transient errors are returned for retry; only NotFound/CRD-not-installed are swallowed.
 - **Cross-namespace ownership**: Config is cluster-scoped, EnvoyFilter is namespaced. Kubernetes GC does not enforce cross-namespace owner refs. Documented as intentional: Config is managed by a higher-level operator, reconcileAITenantDelete cleans up explicitly, and ensureUsageLogsEnvoyFilter deletes on disable.
 - **Graceful degradation**: skips if EnvoyFilter CRD not installed, manifest file not found, or `gatewayRef` not yet populated.
 - **RBAC**: `get;create;patch;delete` (defensive — `get` added even though SSA doesn't require reads).
@@ -190,8 +191,8 @@ Files changed (original EnvoyFilter PR #1035, merged):
 - `maas-controller/cmd/manager/main.go` — wires `GatewayNamespace`
 - `deployment/base/maas-controller/crd/bases/maas.opendatahub.io_configs.yaml` — added `usageLogging` field
 
-Files changed (per-tenant EnvoyFilter, PR #1251):
-- `maas-controller/pkg/controller/maas/aitenant_controller.go` — `envoyFilterTenantID`, `ensureUsageLogsEnvoyFilter`, `deleteEnvoyFilterIfExists`, `applyUsageLogsEnvoyFilter`, `patchEnvoyFilterTargetGateway`; Config watch in `SetupWithManager` + `mapConfigToAITenants` (namespace-scoped); EnvoyFilter cleanup in `reconcileAITenantDelete` (transient errors returned); RBAC marker `get;create;patch;delete`
+Files changed (per-tenant EnvoyFilter, PR #1251, rebased 2026-08-03):
+- `maas-controller/pkg/controller/maas/aitenant_controller.go` — `envoyFilterTenantID`, `ensureUsageLogsEnvoyFilter`, `deleteEnvoyFilterIfExists`, `applyUsageLogsEnvoyFilter`, `patchEnvoyFilterTargetGateway`; Config watch in `SetupWithManager` + `mapConfigToAITenants` (namespace-scoped, coexists with MaasTenantConfig watch from #1272); EnvoyFilter step placed after `tenantConfigReady` gate (gateway guaranteed to exist); EnvoyFilter cleanup in `reconcileAITenantDelete` after `deleteAITenantScopedChildren` (transient errors returned); RBAC marker `get;create;patch;delete`
 - `maas-controller/pkg/controller/maas/aitenant_controller_test.go` — 228 lines: `efManifestPath` helper, `TestAITenantEnsureUsageLogsEnvoyFilter` (disabled, default tenant, named tenant, delete), `TestPatchEnvoyFilterTargetGateway`, `TestUsageLogsEnvoyFilterName`
 - `maas-controller/pkg/platform/tenantreconcile/constants.go` — `UsageLogsEnvoyFilterName` naming function
 - `maas-controller/pkg/controller/maas/self_deployment_controller.go` — removed `ensureUsageLogsEnvoyFilter`, `applyUsageLogsEnvoyFilter`, `deleteEnvoyFilterIfExists`, `envoyFilterManifestPath` const, `envoyFilterName` const, `EnvoyFilterManifestPath` struct field, RBAC marker for envoyfilters
@@ -431,9 +432,9 @@ The script originally used the API key (`$TOKEN`) for model discovery and infere
 
 Fix: Changed model discovery, inference, and rate limit test calls to use `$OC_TOKEN` (OpenShift bearer token). This allows the gateway to use the user's full identity to select the appropriate subscription per model, matching the production flow.
 
-### `aitenant_controller.go` EnvoyFilter Constants (2026-07-23)
+### `aitenant_controller.go` EnvoyFilter Constants (2026-07-23, rebase verified 2026-08-03)
 
-PR #1251: `envoyFilterManifestPath` const now lives in `aitenant_controller.go` (moved from `self_deployment_controller.go` which no longer manages EnvoyFilters). `patchClusterAddress` remains in `self_deployment_controller.go` (shared across both controllers — same Go package).
+PR #1251: `envoyFilterManifestPath` const now lives in `aitenant_controller.go` (moved from `self_deployment_controller.go` which no longer manages EnvoyFilters). `patchClusterAddress` remains in `self_deployment_controller.go` (shared across both controllers — same Go package). After rebase on upstream/main (2026-08-03), the placement adapts to the new `Reconcile()` structure from #1292 (bootstrap race fix): `ensureUsageLogsEnvoyFilter` runs after the `tenantConfigReady` gate, ensuring the gateway exists before creating the EF.
 
 ---
 
@@ -925,7 +926,7 @@ Proxy deploys to `kuadrant-system` by default. OTel Collector CR `usage-logs` ge
 | [#1203](https://github.com/opendatahub-io/models-as-a-service/pull/1203) Dashboards + Proxy + OTel (combined) | `logs_showback` | **Merged** (Jul 23) | Combined dashboards, proxy, OTel collector, and RBAC. All files under `deployment/components/observability/usage-logs/`. | 13 files | LokiStack named `usage`. |
 | Chart step fix | `feature/step-fix` | Open ([#1242](https://github.com/opendatahub-io/models-as-a-service/pull/1242)) | Increase `tokenConsumptionOverTime` range vector from `[30m]` to `[2h]` on both dashboards. Workaround for Loki `split_queries_by_interval: 30m`. Panel description cleaned up. | 2 files | #1203 (merged). |
 | User dropdown auto-populate | `feature/user-dropdown-pop` | Open ([#1243](https://github.com/opendatahub-io/models-as-a-service/pull/1243)) | Replace admin dashboard user `TextVariable` with `LokiLogQLVariable` dropdown. Auto-populates from structured metadata via `count by (user_id)`. Independent (decoupled from subscription/model). `| keep user_id` prevents series explosion. | 1 file | #1203 (merged). #1242 (step fix + error filter). COO 1.5.0 (Loki plugin `0.6.0-beta.0`). |
-| [#1251](https://github.com/opendatahub-io/models-as-a-service/pull/1251) Per-tenant EnvoyFilter | `feature/aitenant-envoy-filter-v2` | Open | Move EnvoyFilter from LifecycleReconciler to AITenantReconciler. Supersedes #1172. All review feedback incorporated. 228 lines of tests. | 6 files, +420/-210 | #1035 (merged), #1203 (merged). |
+| [#1251](https://github.com/opendatahub-io/models-as-a-service/pull/1251) Per-tenant EnvoyFilter | `feature/aitenant-envoy-filter-v2` | Open (needs rebase) | Move EnvoyFilter from LifecycleReconciler to AITenantReconciler. Supersedes #1172. Rebased implementation (2026-08-03) adapts to #1292 bootstrap race fix + #1272 MaasTenantConfig readiness gate: EF step after tenantConfigReady, Config watch coexists with MaasTenantConfig watch. 228 lines of tests. | 6 files, +418/-211 | #1035 (merged), #1203 (merged). Conflicts with #1292, #1272, #1295 resolved. |
 
 **Merge order**: ~~EnvoyFilter~~ (merged) → OTel Collector (#1032) → ~~Combined Dashboards + Proxy + OTel (#1203)~~ (merged) → Per-tenant EnvoyFilter (#1251) → Chart step fix (#1242) → User dropdown auto-populate (#1243).
 
@@ -984,7 +985,7 @@ Found during deployment/testing on amit dev (2026-07-14). **No proxy code was mo
 3. **Loki infra in opendatahub-operator**: CA ConfigMap, ClusterRoleBinding, SA token Secret — platform-level resources for operator to provision.
 4. **`organization_id` not yet populated**: AuthPolicy missing `organizationId` property. Requires `maasauthpolicy_controller.go` change.
 5. **`PersesGlobalDatasource`**: Available in `v1alpha2`. Deploy `usage-logs` and `usage-logs-multi-tenancy` as global datasources.
-6. **Multi-tenant EnvoyFilter** (jrhyness, PR #1035 review): **PR #1251 open** (supersedes #1172). Clean reimplementation from `upstream/main` with all review feedback from ahadas and coderabbitai incorporated. Key design: `AITenantReconciler` manages per-tenant EnvoyFilter with `envoyFilterTenantID` helper, RBAC `get;create;patch;delete`, `mapConfigToAITenants` namespace-scoped, transient cleanup errors returned for retry, cross-namespace OwnerRef documented. 228 lines of tests.
+6. **Multi-tenant EnvoyFilter** (jrhyness, PR #1035 review): **PR #1251 open** (supersedes #1172). Rebased 2026-08-03 on upstream/main after #1292, #1272, #1295 landed. EF step now runs after `tenantConfigReady` gate, Config watch coexists with MaasTenantConfig watch. Key design unchanged: `AITenantReconciler` manages per-tenant EnvoyFilter with `envoyFilterTenantID` helper, RBAC `get;create;patch;delete`, `mapConfigToAITenants` namespace-scoped, transient cleanup errors returned for retry, cross-namespace OwnerRef documented. 228 lines of tests. **Next**: force-push rebased branch, re-trigger CI.
 7. **PR #999 proxy bug fixes**: Address HTTP/1.0 chunked mismatch, duplicate namespace filter injection, POST support, kustomize namespace override, and RBAC gaps (see "Proxy Issues" section).
 8. **OTel Collector CR namespace alignment**: Update `service.namespace` and `kubernetes_namespace_name` in PR #1032 from `openshift-ingress` to `opendatahub` before merging.
 9. **Perses operator image reconciliation**: The `perses-operator` reverts Perses server image to stock during reconciliation. To deploy a patched image (e.g. `quay.io/rh-ee-tgitelma/perses-patched:v4-all-fixes`), scale down the operator (`oc scale deploy perses-operator -n openshift-operators --replicas=0`), patch the Perses statefulset, then scale the operator back up after patching. The operator also provides the CRD conversion webhook — `oc apply` of `PersesDashboard` CRs fails when the operator is scaled down.
