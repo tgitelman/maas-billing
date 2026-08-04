@@ -345,12 +345,24 @@ func envoyFilterTenantID(aitenant *maasv1alpha1.AITenant) string {
 
 // ensureUsageLogsEnvoyFilter deploys or removes a per-tenant EnvoyFilter based on
 // the Config's usageLogging feature gate. Each AITenant gets its own EnvoyFilter
-// scoped to its gateway via spec.targetRefs, emitting structured per-request usage
+// scoped to its gateway via spec.workloadSelector, emitting structured per-request usage
 // logs (token counts, identity, model) to the OTel Collector via gRPC ALS.
+// Sets the ObservabilityReady status condition to reflect the current state.
 func (r *AITenantReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	log := ctrl.LoggerFrom(ctx)
 	gatewayRef := r.gatewayRefFor(aitenant)
 	efName := tenantreconcile.UsageLogsEnvoyFilterName(envoyFilterTenantID(aitenant))
+
+	if r.MonitoringNamespace == "" {
+		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "MonitoringNamespaceNotConfigured",
+			Message:            "Usage-logs EnvoyFilter not deployed: MonitoringNamespace is empty",
+			ObservedGeneration: aitenant.Generation,
+		})
+		return nil
+	}
 
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
@@ -361,10 +373,28 @@ func (r *AITenantReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, ait
 	}
 
 	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
+		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "UsageLoggingDisabled",
+			Message:            "Usage-logs EnvoyFilter not deployed: usageLogging is disabled in Config",
+			ObservedGeneration: aitenant.Generation,
+		})
 		return r.deleteEnvoyFilterIfExists(ctx, log, efName)
 	}
 
-	return r.applyUsageLogsEnvoyFilter(ctx, log, &cfg, efName, gatewayRef.Name)
+	if err := r.applyUsageLogsEnvoyFilter(ctx, log, &cfg, efName, gatewayRef.Name); err != nil {
+		return err
+	}
+
+	apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+		Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             "EnvoyFilterApplied",
+		Message:            fmt.Sprintf("Usage-logs EnvoyFilter %s deployed targeting gateway %s", efName, gatewayRef.Name),
+		ObservedGeneration: aitenant.Generation,
+	})
+	return nil
 }
 
 func (r *AITenantReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger, efName string) error {
@@ -408,8 +438,8 @@ func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log 
 		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
 	}
 
-	if err := patchEnvoyFilterTargetGateway(ef, gatewayName); err != nil {
-		return fmt.Errorf("patch targetRefs gateway in EnvoyFilter: %w", err)
+	if err := patchEnvoyFilterWorkloadSelector(ef, gatewayName); err != nil {
+		return fmt.Errorf("patch workloadSelector gateway in EnvoyFilter: %w", err)
 	}
 
 	ef.SetName(efName)
@@ -438,32 +468,20 @@ func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log 
 	return nil
 }
 
-// patchEnvoyFilterTargetGateway sets spec.targetRefs[0].name to the tenant's gateway
-// so that the EnvoyFilter applies only to traffic through this tenant's gateway.
-func patchEnvoyFilterTargetGateway(ef *unstructured.Unstructured, gatewayName string) error {
-	targetRefs, found, err := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
-	if err != nil {
-		return fmt.Errorf("read targetRefs: %w", err)
+// patchEnvoyFilterWorkloadSelector sets spec.workloadSelector.labels["gateway.networking.k8s.io/gateway-name"]
+// to the tenant's gateway so the EnvoyFilter applies only to traffic through this tenant's gateway.
+// targetRefs and workloadSelector are mutually exclusive in Istio 1.26+; any leftover targetRefs
+// are removed to prevent admission rejection.
+func patchEnvoyFilterWorkloadSelector(ef *unstructured.Unstructured, gatewayName string) error {
+	if err := unstructured.SetNestedStringMap(ef.Object,
+		map[string]string{"gateway.networking.k8s.io/gateway-name": gatewayName},
+		"spec", "workloadSelector", "labels"); err != nil {
+		return fmt.Errorf("write workloadSelector: %w", err)
 	}
-	if !found || len(targetRefs) == 0 {
-		// Manifest uses workloadSelector instead of targetRefs — replace with targetRefs.
-		unstructured.RemoveNestedField(ef.Object, "spec", "workloadSelector")
-		targetRefs = []any{
-			map[string]any{
-				"group": "gateway.networking.k8s.io",
-				"kind":  "Gateway",
-				"name":  gatewayName,
-			},
-		}
-		return unstructured.SetNestedSlice(ef.Object, targetRefs, "spec", "targetRefs")
-	}
-	ref, ok := targetRefs[0].(map[string]any)
-	if !ok {
-		return errors.New("spec.targetRefs[0] is not an object")
-	}
-	ref["name"] = gatewayName
-	targetRefs[0] = ref
-	return unstructured.SetNestedSlice(ef.Object, targetRefs, "spec", "targetRefs")
+	// targetRefs and workloadSelector are mutually exclusive (Istio 1.26+). Drop any
+	// leftover targetRefs from older manifests so SSA/admission never sees both.
+	unstructured.RemoveNestedField(ef.Object, "spec", "targetRefs")
+	return nil
 }
 
 func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AITenant) error {

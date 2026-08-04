@@ -3343,6 +3343,54 @@ func TestAITenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
 		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when usageLogging is disabled")
+
+		// Verify ObservabilityReady condition is set to False
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("UsageLoggingDisabled"))
+	})
+
+	t.Run("monitoring namespace empty sets condition", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: "", // empty — not configured
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		// No EnvoyFilter should be created
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
+		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when MonitoringNamespace is empty")
+
+		// Verify ObservabilityReady condition is set to False with correct reason
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("MonitoringNamespaceNotConfigured"))
 	})
 
 	t.Run("enabled creates per-tenant filter for default tenant", func(t *testing.T) {
@@ -3395,11 +3443,20 @@ func TestAITenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		addr, _, _ := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
 		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc"))
 
-		// Verify targetRefs gateway is patched to the default tenant's gateway name
-		targetRefs, _, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
-		g.Expect(targetRefs).NotTo(BeEmpty())
-		ref0, _ := targetRefs[0].(map[string]any)
-		g.Expect(ref0["name"]).To(Equal(tenantreconcile.DefaultAITenantName))
+		// Verify workloadSelector gateway is patched to the default tenant's gateway name
+		wsLabels, _, _ := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
+		g.Expect(wsLabels).NotTo(BeEmpty())
+		g.Expect(wsLabels["gateway.networking.k8s.io/gateway-name"]).To(Equal(tenantreconcile.DefaultAITenantName))
+
+		// Verify targetRefs removed (mutually exclusive with workloadSelector in Istio 1.26+)
+		_, targetRefsFound, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+		g.Expect(targetRefsFound).To(BeFalse(), "targetRefs must be cleared; mutually exclusive with workloadSelector")
+
+		// Verify ObservabilityReady condition is set to True
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		g.Expect(cond.Reason).To(Equal("EnvoyFilterApplied"))
 	})
 
 	t.Run("enabled creates per-tenant filter for named tenant", func(t *testing.T) {
@@ -3438,11 +3495,14 @@ func TestAITenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 			To(Succeed(), "per-tenant EnvoyFilter should exist")
 		g.Expect(ef.GetName()).To(Equal("maas-model-access-logs-redteam"))
 
-		// Verify targetRefs gateway is patched to the named tenant's gateway
-		targetRefs, _, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
-		g.Expect(targetRefs).NotTo(BeEmpty())
-		ref0, _ := targetRefs[0].(map[string]any)
-		g.Expect(ref0["name"]).To(Equal("redteam"))
+		// Verify workloadSelector gateway is patched to the named tenant's gateway
+		wsLabels, _, _ := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
+		g.Expect(wsLabels).NotTo(BeEmpty())
+		g.Expect(wsLabels["gateway.networking.k8s.io/gateway-name"]).To(Equal("redteam"))
+
+		// Verify targetRefs removed
+		_, targetRefsFound, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+		g.Expect(targetRefsFound).To(BeFalse(), "targetRefs must be cleared")
 	})
 
 	t.Run("deletes existing when disabled", func(t *testing.T) {
@@ -3485,34 +3545,63 @@ func TestAITenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 	})
 }
 
-func TestPatchEnvoyFilterTargetGateway(t *testing.T) {
-	g := NewWithT(t)
+func TestPatchEnvoyFilterWorkloadSelector(t *testing.T) {
+	t.Run("patches workloadSelector and removes targetRefs", func(t *testing.T) {
+		g := NewWithT(t)
 
-	ef := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "networking.istio.io/v1alpha3",
-			"kind":       "EnvoyFilter",
-			"spec": map[string]any{
-				"targetRefs": []any{
-					map[string]any{
-						"group": "gateway.networking.k8s.io",
-						"kind":  "Gateway",
-						"name":  "original-gateway",
+		// Start with a manifest that has targetRefs (legacy format)
+		ef := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "networking.istio.io/v1alpha3",
+				"kind":       "EnvoyFilter",
+				"spec": map[string]any{
+					"targetRefs": []any{
+						map[string]any{
+							"group": "gateway.networking.k8s.io",
+							"kind":  "Gateway",
+							"name":  "original-gateway",
+						},
 					},
 				},
 			},
-		},
-	}
+		}
 
-	err := patchEnvoyFilterTargetGateway(ef, "redteam-gateway")
-	g.Expect(err).NotTo(HaveOccurred())
+		err := patchEnvoyFilterWorkloadSelector(ef, "redteam-gateway")
+		g.Expect(err).NotTo(HaveOccurred())
 
-	targetRefs, _, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
-	g.Expect(targetRefs).To(HaveLen(1))
-	ref0, _ := targetRefs[0].(map[string]any)
-	g.Expect(ref0["name"]).To(Equal("redteam-gateway"))
-	g.Expect(ref0["group"]).To(Equal("gateway.networking.k8s.io"))
-	g.Expect(ref0["kind"]).To(Equal("Gateway"))
+		wsLabels, found, _ := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
+		g.Expect(found).To(BeTrue())
+		g.Expect(wsLabels["gateway.networking.k8s.io/gateway-name"]).To(Equal("redteam-gateway"))
+
+		_, targetRefsFound, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+		g.Expect(targetRefsFound).To(BeFalse(), "targetRefs must be removed; mutually exclusive with workloadSelector")
+	})
+
+	t.Run("patches existing workloadSelector", func(t *testing.T) {
+		g := NewWithT(t)
+
+		// Start with a manifest that already has workloadSelector
+		ef := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "networking.istio.io/v1alpha3",
+				"kind":       "EnvoyFilter",
+				"spec": map[string]any{
+					"workloadSelector": map[string]any{
+						"labels": map[string]any{
+							"gateway.networking.k8s.io/gateway-name": "old-gateway",
+						},
+					},
+				},
+			},
+		}
+
+		err := patchEnvoyFilterWorkloadSelector(ef, "new-gateway")
+		g.Expect(err).NotTo(HaveOccurred())
+
+		wsLabels, found, _ := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
+		g.Expect(found).To(BeTrue())
+		g.Expect(wsLabels["gateway.networking.k8s.io/gateway-name"]).To(Equal("new-gateway"))
+	})
 }
 
 func TestUsageLogsEnvoyFilterName(t *testing.T) {
