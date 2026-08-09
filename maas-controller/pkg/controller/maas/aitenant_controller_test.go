@@ -3543,6 +3543,162 @@ func TestAITenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
 	})
+
+	t.Run("sets condition and deletes EF when Config not found", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		// No Config object — simulates Config CR being removed
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+		existingEF := &unstructured.Unstructured{}
+		existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		existingEF.SetName(tenantreconcile.UsageLogsEnvoyFilterName(""))
+		existingEF.SetNamespace(gwNS)
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(aitenant, existingEF).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: monitoringNS,
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		// EF should be deleted
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
+		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when Config is not found")
+
+		// ObservabilityReady condition should be set to False
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("ConfigNotFound"))
+	})
+
+	t.Run("sets ObservabilityReady condition when usageLogging enabled but MonitoringNamespace empty", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: "", // deliberately empty
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred(), "should not return error — non-blocking degradation")
+
+		// No EnvoyFilter should be created
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
+		getErr := cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(getErr)).To(BeTrue(), "no EnvoyFilter should be created when MonitoringNamespace is empty")
+
+		// ObservabilityReady condition should be set to False
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("MonitoringNamespaceNotConfigured"))
+	})
+
+	t.Run("sets EnvoyFilterSkipped condition when manifest not found", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:                  cl,
+			Scheme:                  s,
+			APIReader:               cl,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			AITenantNamespace:       aitenantNS,
+			EnvoyFilterManifestPath: "/nonexistent/path/envoyfilter.yaml",
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred(), "missing manifest is non-fatal")
+
+		// ObservabilityReady condition should be set to False with EnvoyFilterSkipped reason
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("EnvoyFilterSkipped"))
+	})
+
+	t.Run("sets UsageLoggingDisabled condition when usageLogging off and MonitoringNamespace empty", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: "", // empty — MonitoringNamespace check is first, so condition is MonitoringNamespaceNotConfigured
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		// MonitoringNamespace check fires first (before Config lookup)
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("MonitoringNamespaceNotConfigured"))
+	})
 }
 
 func TestPatchEnvoyFilterWorkloadSelector(t *testing.T) {

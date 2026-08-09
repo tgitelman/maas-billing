@@ -367,6 +367,13 @@ func (r *AITenantReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, ait
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		if apierrors.IsNotFound(err) {
+			apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+				Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             "ConfigNotFound",
+				Message:            "Usage-logs EnvoyFilter not deployed: Config CR not found",
+				ObservedGeneration: aitenant.Generation,
+			})
 			return r.deleteEnvoyFilterIfExists(ctx, log, efName)
 		}
 		return err
@@ -383,17 +390,28 @@ func (r *AITenantReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, ait
 		return r.deleteEnvoyFilterIfExists(ctx, log, efName)
 	}
 
-	if err := r.applyUsageLogsEnvoyFilter(ctx, log, &cfg, efName, gatewayRef.Name); err != nil {
+	applied, err := r.applyUsageLogsEnvoyFilter(ctx, log, &cfg, efName, gatewayRef.Name)
+	if err != nil {
 		return err
 	}
 
-	apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
-		Type:               maasv1alpha1.AITenantConditionObservabilityReady,
-		Status:             metav1.ConditionTrue,
-		Reason:             "EnvoyFilterApplied",
-		Message:            fmt.Sprintf("Usage-logs EnvoyFilter %s deployed targeting gateway %s", efName, gatewayRef.Name),
-		ObservedGeneration: aitenant.Generation,
-	})
+	if applied {
+		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             "EnvoyFilterApplied",
+			Message:            fmt.Sprintf("Usage-logs EnvoyFilter %s deployed targeting gateway %s", efName, gatewayRef.Name),
+			ObservedGeneration: aitenant.Generation,
+		})
+	} else {
+		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "EnvoyFilterSkipped",
+			Message:            "Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+			ObservedGeneration: aitenant.Generation,
+		})
+	}
 	return nil
 }
 
@@ -413,7 +431,7 @@ func (r *AITenantReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log 
 	return nil
 }
 
-func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config, efName, gatewayName string) error {
+func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config, efName, gatewayName string) (bool, error) {
 	manifestPath := r.EnvoyFilterManifestPath
 	if manifestPath == "" {
 		manifestPath = envoyFilterManifestPath
@@ -422,24 +440,24 @@ func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log 
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestPath)
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestPath, err)
+		return false, fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestPath, err)
 	}
 
 	ef := &unstructured.Unstructured{}
 	dec := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
 	if _, _, err := dec.Decode(raw, nil, ef); err != nil {
-		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
+		return false, fmt.Errorf("decode EnvoyFilter manifest: %w", err)
 	}
 
 	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc", r.MonitoringNamespace)
 	if err := patchClusterAddress(ef, collectorAddress); err != nil {
-		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
+		return false, fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
 	}
 
 	if err := patchEnvoyFilterWorkloadSelector(ef, gatewayName); err != nil {
-		return fmt.Errorf("patch workloadSelector gateway in EnvoyFilter: %w", err)
+		return false, fmt.Errorf("patch workloadSelector gateway in EnvoyFilter: %w", err)
 	}
 
 	ef.SetName(efName)
@@ -450,28 +468,35 @@ func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log 
 	// Config is removed. That's acceptable: Config is managed by a higher-level
 	// operator and outlives tenants; reconcileAITenantDelete explicitly cleans up
 	// the EF, and ensureUsageLogsEnvoyFilter deletes it when usageLogging is off.
+	//
+	// Note: the API server does not currently reject cross-namespace ownerRefs on
+	// namespaced resources. If a future Kubernetes version tightens this constraint,
+	// switch to a label-based ownership model (e.g., maas.opendatahub.io/config-owner).
 	if err := controllerutil.SetOwnerReference(cfg, ef, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on EnvoyFilter: %w", err)
+		return false, fmt.Errorf("set owner reference on EnvoyFilter: %w", err)
 	}
 
 	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		if apimeta.IsNoMatchError(err) {
 			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("apply usage-logs EnvoyFilter %s: %w", efName, err)
+		return false, fmt.Errorf("apply usage-logs EnvoyFilter %s: %w", efName, err)
 	}
 
 	log.V(1).Info("applied usage-logs EnvoyFilter",
 		"name", efName, "namespace", r.GatewayNamespace,
 		"gateway", gatewayName, "collector", collectorAddress)
-	return nil
+	return true, nil
 }
 
 // patchEnvoyFilterWorkloadSelector sets spec.workloadSelector.labels["gateway.networking.k8s.io/gateway-name"]
 // to the tenant's gateway so the EnvoyFilter applies only to traffic through this tenant's gateway.
 // targetRefs and workloadSelector are mutually exclusive in Istio 1.26+; any leftover targetRefs
 // are removed to prevent admission rejection.
+//
+// Note: SetNestedStringMap replaces the entire labels map. If the manifest ever needs
+// additional workloadSelector labels, merge them here rather than relying on the manifest value.
 func patchEnvoyFilterWorkloadSelector(ef *unstructured.Unstructured, gatewayName string) error {
 	if err := unstructured.SetNestedStringMap(ef.Object,
 		map[string]string{"gateway.networking.k8s.io/gateway-name": gatewayName},
@@ -916,6 +941,9 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 	}
 	if err := r.deleteTenantGatewayAuthPolicy(ctx, aitenant); err != nil {
 		log.Error(err, "best-effort deleteTenantGatewayAuthPolicy failed during forced finalizer removal")
+	}
+	if err := r.deleteEnvoyFilterIfExists(ctx, log, tenantreconcile.UsageLogsEnvoyFilterName(envoyFilterTenantID(aitenant))); err != nil {
+		log.Error(err, "best-effort deleteEnvoyFilter failed during forced finalizer removal")
 	}
 	if err := r.deleteGatewayClaim(ctx, aitenant); err != nil {
 		log.Error(err, "best-effort deleteGatewayClaim failed during forced finalizer removal")

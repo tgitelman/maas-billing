@@ -171,14 +171,32 @@ failed_models=0
 for idx in "${!MODEL_IDS[@]}"; do
     model_id="${MODEL_IDS[$idx]}"
     model_url="${MODEL_URLS[$idx]}"
+    # Build inference URL: prefer /llm/<model_id> path prefix over the raw model URL
+    # when the model URL is the gateway root (no model path in URL).
+    inference_base="${model_url%/}"
+    if [[ "$inference_base" == "$API_BASE" ]] || [[ "$inference_base" == "${API_BASE}/" ]]; then
+        inference_base="${API_BASE}/llm/${model_id}"
+    fi
     
     echo -e "${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${MAGENTA}Testing Model: $model_id${NC}"
-    echo -e "${MAGENTA}URL: $model_url${NC}"
+    echo -e "${MAGENTA}URL: $inference_base${NC}"
     echo -e "${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
     
     model_success=0
+
+    # Resolve the backend model name by querying the model's /v1/models endpoint.
+    # The models API returns the MaaSModelRef ID which may differ from the backend
+    # model name (e.g. "facebook-opt-125m-simulated" vs "facebook/opt-125m").
+    backend_model_name=$(curl -sSk \
+        -H "Authorization: Bearer $OC_TOKEN" \
+        "${inference_base}/v1/models" 2>/dev/null | jq -r '.data[0].id // empty' 2>/dev/null)
+    if [ -z "$backend_model_name" ]; then
+        backend_model_name="$model_id"
+    else
+        echo -e "${CYAN}Backend model name:${NC} $backend_model_name"
+    fi
     
     echo -e "${BLUE}Testing inference with different prompts:${NC}"
     echo ""
@@ -190,7 +208,7 @@ for idx in "${!MODEL_IDS[@]}"; do
         
         REQUEST_BODY=$(cat <<EOF
 {
-  "model": "$model_id",
+  "model": "$backend_model_name",
   "messages": [
     {"role": "system", "content": "You are a helpful assistant. Keep responses brief."},
     {"role": "user", "content": "$prompt"}
@@ -207,7 +225,7 @@ EOF
             -X POST \
             -d "$REQUEST_BODY" \
             -w "\nHTTP_STATUS:%{http_code}\n" \
-            "${model_url}/v1/chat/completions" 2>&1)
+            "${inference_base}/v1/chat/completions" 2>&1)
         
         http_status=$(echo "$response" | grep "HTTP_STATUS:" | cut -d':' -f2)
         response_body=$(echo "$response" | sed '/HTTP_STATUS:/d')
@@ -249,14 +267,27 @@ if [ ${#MODEL_IDS[@]} -eq 0 ]; then
 else
     model_id="${MODEL_IDS[0]}"
     model_url="${MODEL_URLS[0]}"
+    # Build inference URL for rate limit test using the same /llm/<model_id> logic
+    rl_inference_base="${model_url%/}"
+    if [[ "$rl_inference_base" == "$API_BASE" ]] || [[ "$rl_inference_base" == "${API_BASE}/" ]]; then
+        rl_inference_base="${API_BASE}/llm/${model_id}"
+    fi
     
     echo -e "${BLUE}Making rapid requests to trigger rate limit...${NC}"
     echo "Using model: $model_id"
     echo ""
     
+    # Resolve the backend model name for rate limit testing
+    rl_backend_model_name=$(curl -sSk \
+        -H "Authorization: Bearer $OC_TOKEN" \
+        "${rl_inference_base}/v1/models" 2>/dev/null | jq -r '.data[0].id // empty' 2>/dev/null)
+    if [ -z "$rl_backend_model_name" ]; then
+        rl_backend_model_name="$model_id"
+    fi
+
     REQUEST_BODY_SIMPLE=$(cat <<EOF
 {
-  "model": "$model_id",
+  "model": "$rl_backend_model_name",
   "messages": [
     {"role": "user", "content": "Count to 5"}
   ],
@@ -278,7 +309,7 @@ EOF
             -X POST \
             -d "$REQUEST_BODY_SIMPLE" \
             -w "\nHTTP_STATUS:%{http_code}\n" \
-            "${model_url}/v1/chat/completions" 2>&1)
+            "${rl_inference_base}/v1/chat/completions" 2>&1)
         
         http_status=$(echo "$response" | grep "HTTP_STATUS:" | cut -d':' -f2)
         
