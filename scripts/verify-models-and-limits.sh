@@ -158,6 +158,8 @@ echo ""
 
 mapfile -t MODEL_IDS < <(echo "$response_body" | jq -r '.data[].id')
 mapfile -t MODEL_URLS < <(echo "$response_body" | jq -r '.data[].url')
+# owned_by is the gateway path prefix (e.g. llm/<maasmodelref-name>), not the catalog id
+mapfile -t MODEL_OWNED_BY < <(echo "$response_body" | jq -r '.data[].owned_by // empty')
 
 prompts=(
     "What is 2+2?"
@@ -171,11 +173,16 @@ failed_models=0
 for idx in "${!MODEL_IDS[@]}"; do
     model_id="${MODEL_IDS[$idx]}"
     model_url="${MODEL_URLS[$idx]}"
-    # Build inference URL: prefer /llm/<model_id> path prefix over the raw model URL
-    # when the model URL is the gateway root (no model path in URL).
+    owned_by="${MODEL_OWNED_BY[$idx]:-}"
+    # Build inference URL: when the model URL is the gateway root, use owned_by
+    # (llm/<ref>) — catalog ids like publishers/llm/models/... are not HTTPRoute prefixes.
     inference_base="${model_url%/}"
     if [[ "$inference_base" == "$API_BASE" ]] || [[ "$inference_base" == "${API_BASE}/" ]]; then
-        inference_base="${API_BASE}/llm/${model_id}"
+        if [[ -n "$owned_by" && "$owned_by" != "null" ]]; then
+            inference_base="${API_BASE}/${owned_by}"
+        else
+            inference_base="${API_BASE}/llm/${model_id}"
+        fi
     fi
     
     echo -e "${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -267,10 +274,15 @@ if [ ${#MODEL_IDS[@]} -eq 0 ]; then
 else
     model_id="${MODEL_IDS[0]}"
     model_url="${MODEL_URLS[0]}"
-    # Build inference URL for rate limit test using the same /llm/<model_id> logic
+    owned_by="${MODEL_OWNED_BY[0]:-}"
+    # Build inference URL for rate limit test using owned_by gateway path when needed
     rl_inference_base="${model_url%/}"
     if [[ "$rl_inference_base" == "$API_BASE" ]] || [[ "$rl_inference_base" == "${API_BASE}/" ]]; then
-        rl_inference_base="${API_BASE}/llm/${model_id}"
+        if [[ -n "$owned_by" && "$owned_by" != "null" ]]; then
+            rl_inference_base="${API_BASE}/${owned_by}"
+        else
+            rl_inference_base="${API_BASE}/llm/${model_id}"
+        fi
     fi
     
     echo -e "${BLUE}Making rapid requests to trigger rate limit...${NC}"

@@ -164,7 +164,9 @@ Active Users panel: added `| user_id!="-"` to exclude Envoy dash sentinel from d
 - Token consumption chart: 3 models (177 + 226 + 244 = 647, matches total)
 - Empty `response_type` entries: **0** (confirms all entries have response_type on fresh deploy)
 
-All core components deployed and verified on clusters `amit.dev.datahub.redhat.com` (ODH), `giteltal.dev.datahub.redhat.com` (ODH), and `ahadas-ahadas-rhoai.dev.datahub.redhat.com` (RHOAI). Pipeline: Envoy → OTel Collector (OpenTelemetryCollector CR) → Loki. All identity fields sourced from Kuadrant WASM plugin's FILTER_STATE (`wasm.kuadrant.auth.identity.*`). Composite filter (path-based suffix match) restricts body parsing to inference paths only. Verified on all platforms.
+Pipeline verified on **ODH** clusters `amit.dev.datahub.redhat.com` and `giteltal.dev.datahub.redhat.com`: Envoy → OTel Collector → Loki; **identity fields** (`user_id`, `subscription`, `key_*`, etc.) populated from Kuadrant WASM FILTER_STATE (`wasm.kuadrant.auth.identity.*`). Composite filter (path-based suffix match) restricts body parsing to inference paths only.
+
+On **RHOAI**, the same pipeline runs (model/tokens/response_type land in Loki) but **identity fields are not collected** — see **Issue #5** and the version matrix there. Do **not** treat `ahadas-ahadas-rhoai` or RHOAI 3.5.0 GA as identity-validated.
 
 ### Controller Feature Gate: `usageLogging` (2026-07-07)
 
@@ -424,6 +426,15 @@ Controlled by LokiStack `spec.limits.global.otlp.streamLabels.resourceAttributes
 ### LokiStack Naming Convention (Updated 2026-07-20)
 
 LokiStack must be named `usage` to produce the gateway service `usage-gateway-http` — matching the OTel Collector exporter endpoint (`usage-gateway-http.${env:NAMESPACE}.svc:8080`) and the proxy's dynamic URL construction (`usage-gateway-http.{namespace}.svc:8080`). Previous POC used `maas-loki` (service: `maas-loki-gateway-http`) which was a deviation.
+
+### `verify-models-and-limits.sh` — RHOAI 3.5.0 `owned_by` fix (2026-08-12)
+
+Supersedes inference-path logic for RHOAI GA validation. See **Repo fix (validation script)** under giteltal-rosa manual workarounds for full detail.
+
+1. `/maas-api/v1/models` returns catalog `id` and gateway path prefix `owned_by`.
+2. When `model.url` is the gateway root, inference must use `owned_by` (e.g. `llm/facebook-opt-125m-simulated`), not `publishers/llm/models/...`.
+
+Earlier fix (2026-07-20): use `$OC_TOKEN` for discovery/inference so subscription selection works. Both fixes are required on RHOAI 3.5.0.
 
 ### `verify-models-and-limits.sh` Script Fix (2026-07-20)
 
@@ -998,9 +1009,391 @@ Found during deployment/testing on amit dev (2026-07-14). **No proxy code was mo
 
 ---
 
-## RHOAI Platform Gap
+## RHOAI 3.5.0 release validation (giteltal-rosa) — 2026-08-12
 
-**FILTER_STATE identity fields return `-` on RHOAI** (3.5.0-ea.2 with RHCL 1.3.4). Root cause: RHOAI's WASM plugin version doesn't populate `wasm.kuadrant.auth.identity.*` keys the same way as ODH with Kuadrant 1.4.2+. The `json_to_metadata` (model/tokens), Lua SSE companion, CEL filter, and OTel ALS structure work identically on both platforms — only identity field population differs.
+**Goal:** Pre-release plan (`opendatahub` / amit.dev) is historical. Now validate whether the **RHOAI 3.5.0 product release** usage-logs path works on a fresh ROSA HCP cluster after installing RHOAI.
+
+**Doc map (this section):** Install chain → Prerequisites → Expected vs unexpected → Proposed ClusterRole (#9+SCC) → Living list → Issue #5 / #8 / #9 / #1 → Validation results → Manual workarounds → COO follow-up.
+
+| Item | Value |
+|------|--------|
+| Cluster | `api.giteltal-rosa.6y5o.p3.openshiftapps.com` (ROSA HCP, OCP 4.21.0) |
+| Product | RHOAI **3.5.0** (stock `odh-maas-controller-rhel9`) |
+| Monitoring NS | `redhat-ods-monitoring` (`maas-parameters.monitoring-namespace`) |
+| Config | `usageLogging: true` (enabled during validation; started false) |
+
+### Install chain (giteltal-rosa — not via this repo's `deploy.sh`)
+
+```
+OLM rhods-operator 3.5.0
+  → admin DSC / DSCI
+  → ai-gateway-operator
+  → AIGateway / default-aigateway
+  → maas-controller (stock odh-maas-controller-rhel9)
+```
+
+| Component | Namespace / note |
+|-----------|------------------|
+| Monitoring | `redhat-ods-monitoring` (`maas-parameters.monitoring-namespace`) |
+| Tenant | `models-as-a-service` |
+| Dashboard host | `https://rh-ai.apps.rosa.giteltal-rosa.6y5o.p3.openshiftapps.com` |
+
+### Prerequisites we install (not shipped by RHOAI)
+
+RHOAI does **not** deploy MinIO or LokiStack. The release usage-logs bundle (OTel Collector → `usage-gateway-http`) **requires** them as cluster prerequisites:
+
+1. **Loki Operator** (`loki-operator`, channel `stable-6.6`) + **OpenTelemetry Operator** (`opentelemetry-product`)
+2. **MinIO** (S3-compatible object store for Loki)
+3. **LokiStack** named **`usage`** in the monitoring namespace (gateway Service must be `usage-gateway-http`)
+
+Document findings here as we hit them — stop and record any unexpected release deviation.
+
+### Expected vs unexpected (out of the box)
+
+**Legend:** *Expected* = documented admin prereq or product behavior. *Unexpected* = release gap; required manual workaround on giteltal-rosa.
+
+#### Should work OOTB (after admin prerequisites)
+
+| Area | Expected when… |
+|------|----------------|
+| **Usage-logs prerequisites** | Admin installs Loki Operator, OTel Operator, MinIO, LokiStack `usage`; sets `Config.spec.usageLogging: true` |
+| **Controller reconcile** | EnvoyFilter (ALS → OTel), OTelCollector `usage-logs`, tenancy-proxy Deployment, Perses dashboards/datasources CRs |
+| **Inference + ingest** | Models respond; Loki receives `model`, `tokens_*`, `response_type` via Envoy → OTel → `usage-gateway-http` |
+| **Observe prerequisites** | Admin installs COO, configures DSCI `monitoring.metrics.storage`, sets `observabilityDashboard: true` |
+| **After Observe prereqs** | Perses CR, MaaS usage dashboards, Prometheus datasources, usage-logs PersesDatasource CRs exist |
+| **Namespace remap** | Manifests say `opendatahub`; controller remaps to `MONITORING_NAMESPACE` (`redhat-ods-monitoring` on RHOAI) — **not a bug** (#2) |
+| **Premium samples** | Simulators/subscriptions apply; OpenShift **Group** membership for `premium-user` is admin responsibility |
+
+#### Product gaps on 3.5.0 GA (not addressable by cluster workarounds alone)
+
+| # | Area | Why |
+|---|------|-----|
+| **9** | Loki write RBAC | Controller cannot create `usage-collector-application-logs-write` (privilege escalation) → collector cannot push to Loki |
+| **SCC** | Tenancy-proxy | Controller cannot grant `nonroot-v2` → proxy Deployment stuck (same class as #9) |
+| **11** | Dashboard → Perses | No `/perses` HTTPRoute; NP blocks gateway; path rewrites wrong; datasource bearer tokens + OPA RBAC missing |
+| **5** | Identity in logs | `user_id`, `subscription`, `groups`, `key_*`, `organization_id` **not in Loki** (FILTER_STATE empty). **No workaround.** |
+| **1** | Backend readiness | No warning when MinIO / LokiStack / `usage-gateway-http` missing despite `usageLogging: true` |
+| **8** | Privacy | No user-capture flag on Loki path (`captureUser` is metrics-only) |
+| **10** | Kuadrant ops | Recreating `Kuadrant` can leave Authorino mTLS off → api-keys 500 |
+| **7** | Mesh side effect | OTel InstallPlan upgrades OSSM 3.2 → 3.4.1 (accepted on giteltal-rosa) |
+
+#### giteltal-rosa status (2026-08-12, end of validation)
+
+| Path | OOTB? | giteltal-rosa |
+|------|-------|---------------|
+| Inference + Loki ingest (`model`/`tokens`) | Yes (with prereqs) | **Works** (after #9 workaround) |
+| Identity dimensions in Loki / dashboards | Should, but **broken on GA** | **Not in Loki** — see Issue #5 |
+| Tenancy-proxy | Yes (with `usageLogging`) | **Works** (after SCC workaround) |
+| Observability tab / Perses panels | Yes (with COO + DSCI + dashboard flag) | **Works** (after #11 workaround) |
+| Usage dashboards filter by user/subscription | Yes (with identity in Loki) | **No data** — identity never written to Loki (#5) |
+
+**Proposed product fix (#9 + SCC):** Grant `maas-controller` SA via **ClusterRoleBinding** to a new ClusterRole (parent operators: [ai-gateway-operator](https://github.com/opendatahub-io/ai-gateway-operator/), [opendatahub-operator](https://github.com/opendatahub-io/opendatahub-operator/) — companion PRs required per `AGENTS.md`). See **Proposed maas-controller grant ClusterRole** below.
+
+### Proposed maas-controller grant ClusterRole (#9 + SCC)
+
+Bind to `system:serviceaccount:redhat-ods-applications:maas-controller` with a **ClusterRoleBinding** (namespaced RoleBinding was **not** enough for SCC on giteltal-rosa).
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-controller-usage-logs-grant
+  labels:
+    app.kubernetes.io/managed-by: maas-controller
+    app.kubernetes.io/part-of: maas-observability
+rules:
+  # #9 — privilege escalation: controller must hold Loki write before it can create usage-collector-application-logs-write
+  - apiGroups: [loki.grafana.com]
+    resources: [application]
+    resourceNames: [logs]
+    verbs: [create, get]
+  # Proxy / Perses datasource paths that perform SAR against pods/log
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # Tenancy-proxy TokenReview
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+  # SCC — controller must create RoleBinding usage-tenancy-proxy-scc-nonroot-v2
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [create, patch]
+  # SCC — privilege escalation: controller must hold nonroot-v2 use before binding proxy SA
+  - apiGroups: [security.openshift.io]
+    resources: [securitycontextconstraints]
+    resourceNames: [nonroot-v2]
+    verbs: [use]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: maas-controller-usage-logs-grant
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: maas-controller-usage-logs-grant
+subjects:
+  - kind: ServiceAccount
+    name: maas-controller
+    namespace: redhat-ods-applications
+```
+
+**#11 (Perses) is separate** — not fixed by this ClusterRole. Still needs Monitoring/Dashboard operator wiring (HTTPRoute, NP, datasource secrets).
+
+### Release issues / findings (living list)
+
+| # | Severity | Finding | Notes / status |
+|---|----------|---------|----------------|
+| **8** | **Gap (privacy)** | **No user-capture flag on the usage-logs / Loki path** | Dedicated write-up below. Metrics `captureUser` does **not** apply. |
+| 1 | **Gap** | **No warning that MinIO / LokiStack are required** when `usageLogging: true` | See detail below — confirmed in controller code (3.5.0). |
+| 2 | Info | Manifests still hardcode `namespace: opendatahub` | **Not a bug** — controller `postBuildTransform` remaps `opendatahub` → `MONITORING_NAMESPACE` (`redhat-ods-monitoring` on RHOAI). |
+| 3 | Prereq | No MinIO / LokiStack / OTel / Loki operators in product install | Expected — we install these ourselves before enabling `usageLogging`. |
+| **5** | **RELEASE GAP — no workaround** | **No identity in Loki usage logs on RHOAI 3.5.0** | `user_id`, `subscription`, `groups`, `key_id`, `key_name`, `organization_id` are **not collected** — all `-` in Loki. `model` / `tokens_*` / `response_type` **do** land. Broken on ea.2 (RHCL 1.3.4) **and** GA with RHCL 1.4.2 (giteltal-rosa). **Works on ODH** (Kuadrant 1.4.2+, amit.dev/giteltal.dev). See **Issue #5** version matrix. |
+| **6** | **Prereq (admin)** | **Observe UI needs COO + DSCI metrics + dashboard flag** | Expected admin work: COO `v1.5.1`, DSCI `monitoring.metrics.storage`, `observabilityDashboard: true`. Perses + `dashboard-3-maas-usage-admin` + usage datasources appear after this. Not a product bug. |
+| **SCC** | **Gap (RBAC / release)** | **Tenancy-proxy blocked — controller cannot grant `nonroot-v2`** | Same privilege-escalation class as #9. Proxy Deployment never reconciles until `maas-controller` can grant SCC use. `oc adm policy add-scc-to-user` (namespaced RoleBinding) was **not** enough on giteltal-rosa. **Workaround:** `ClusterRoleBinding/maas-controller-scc-nonroot-v2`. **Proposed fix:** include SCC `nonroot-v2` use + `rolebindings` create/patch in parent-operator grant ClusterRole (see Expected vs unexpected). |
+| 7 | **Accepted** | OTel InstallPlan also upgrades OSSM **3.2 → 3.4.1** | Approved per operator; Mesh bump risk accepted. |
+| **9** | **Gap (RBAC / release)** | **`usageLogging: true` fails to grant Loki write RBAC** | Stock controller cannot create `ClusterRole/usage-collector-application-logs-write` — Kubernetes forbids granting `loki.grafana.com/application/logs` create because `maas-controller` SA does not hold that permission. OTel collector + EnvoyFilter still apply; Loki write binding never lands. See detail below. |
+| **10** | **Ops / Kuadrant** | **Recreating `Kuadrant` CR left Gateway→Authorino gRPC without TLS** | After recreate, `status.mtlsAuthorino=false` and `kuadrant-auth-*` EnvoyFilter had **no** `transport_socket`, while Authorino listener TLS stayed on (service-ca). Wasm: `gRPC status code is not OK` → `/maas-api/v1/api-keys` HTTP 500. Fix: `oc patch kuadrant kuadrant -n kuadrant-system --type=merge -p '{"spec":{"mtls":{"enable":true,"authorino":true}}}'` (adds SDS TLS to auth cluster). Also re-ran `setup-authorino-tls.sh`; annotated Gateway `security.opendatahub.io/authorino-tls-bootstrap=true` (was missing on stock RHOAI gateway). |
+| **11** | **Gap (Observe wiring)** | **Dashboard → Perses not wired by product** | **Unexpected.** Symptoms: `Unexpected token '<'` (SPA HTML), federation manifest error, `document not found` on panels. Causes: no `/perses` HTTPRoute; NP `perses-operator-access` blocks gateway; dashboard uses `/perses/api` but Perses serves `/api/v1`, `/plugins`, `/proxy`. **giteltal-rosa workaround (UI works):** `NetworkPolicy/perses-dashboard-access` + `ReferenceGrant/allow-dashboard-to-perses` + `HTTPRoute/data-science-perses` with **three** rewrites (`/perses/api/api`→`/api`, `/perses/api/v1`→`/api/v1`, `/perses/api`→`/`); SA token secrets `usage-logs-all-secret` / `usage-logs-multi-tenancy-secret`; ClusterRole `usage-logs-application-logs-read` (loki `application` get + `pods/log` + **`namespaces` list** for openshift-logging OPA); Bearer injected into Perses Secret API (operator only synced TLS CA). **Fragile:** perses-operator may wipe Bearer on datasource reconcile. |
+
+#### Issue #8 — ABSENCE: user-capture flag for Loki / usage logs (RHOAI 3.5.0)
+
+**Problem:** There is **no product flag** to enable/disable capturing `user_id` on the Envoy → OTel → Loki usage-logs path.
+
+**Verified on stock 3.5.0 (`odh-maas-controller-rhel9`) + CRDs on giteltal-rosa:**
+
+| Place checked | Result |
+|---------------|--------|
+| `Config.spec` | Only `usageLogging` + `limitadorScrapeInterval`. **No** `captureUser` / `emitUserId` / redact field. |
+| `AITenant.spec` | Only `gateway` / `oidc` / deprecated `rbac`. **No** telemetry or user-capture fields. |
+| `MaasTenantConfig.spec.telemetry.metrics.captureUser` | **Exists** (default `false`) but wired **only** to Limitador/Prometheus TelemetryPolicy label `"user"` (`buildTelemetryLabels`). **Does not** touch ALS / OTel / Loki. |
+| EnvoyFilter `envoy-otel-access-log.yaml` | Always includes `user_id` ← `FILTER_STATE(...userid...)`. No conditional. |
+| OTel Collector CR | Only `replace_pattern` to strip quotes from `user_id`. **No** `transform/redact` / `delete_key`. |
+| Controller | No code path that toggles `user_id` emission based on any CR field. |
+
+**Behavior:** `usageLogging: true` ⇒ `user_id` is always sent to Loki (along with other identity attrs per Config CRD docs). Cannot keep usage logs on and redact user identity.
+
+**Pre-release vs release:** Plan described a manual OTel `transform/redact` (comment/uncomment `delete_key`) as a 2-line toggle. That did **not** ship as a Config/AITenant/MaasTenantConfig API in 3.5.0; stock collector has no redact processor at all.
+
+**GDPR implication:** Metrics path is safe-by-default (`captureUser: false`). Usage-logs path is **not** — enabling the feature enables user identity logging with no separate consent knob.
+
+**Open product question:** Should we implement a Loki-path user-capture flag (e.g. `Config.spec.usageLoggingCaptureUser` or reuse naming `captureUser` under usage logging), default `false`?
+
+#### Issue #5 — RELEASE GAP: no identity in Loki usage logs (RHOAI 3.5.0 GA)
+
+> **Documenting this finding records a product defect. It does not fix it. No manual workaround was applied on giteltal-rosa.**
+
+**Symptom:** Usage logs reach Loki, but **caller identity is not collected**. Every identity field is the Envoy sentinel `-` (empty).
+
+**Verified on giteltal-rosa (RHOAI 3.5.0 GA, stock `odh-maas-controller-rhel9`, 2026-08-12):**
+
+| Field | In Loki? | Notes |
+|-------|----------|-------|
+| `model` | **Yes** | From request/response body (`json_to_metadata`) |
+| `tokens_total` / `tokens_prompt` / `tokens_completion` | **Yes** | From response body or Lua SSE companion |
+| `response_type` | **Yes** | `hit` / `rate_limit` / `error` |
+| `user_id` | **No** | Always `-` |
+| `subscription` | **No** | Always `-` |
+| `groups` | **No** | Always `-` |
+| `key_id` / `key_name` | **No** | Always `-` |
+| `organization_id` | **No** | Always `-` |
+
+Inference returns **200**. Kuadrant auth works. API keys work. Subscriptions are enforced. Only the **usage-log identity attributes** are missing.
+
+**How identity is supposed to work (maas-controller EnvoyFilter):**
+
+All six identity attributes are read from Envoy **FILTER_STATE**, set by the Kuadrant WASM plugin after Authorino auth:
+
+```
+%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%
+%FILTER_STATE(wasm.kuadrant.auth.identity.selected_subscription:PLAIN)%
+%FILTER_STATE(wasm.kuadrant.auth.identity.groups:PLAIN)%
+%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%
+%FILTER_STATE(wasm.kuadrant.auth.identity.keyName:PLAIN)%
+%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%
+```
+
+Source: `deployment/components/observability/usage-logs/envoy-otel-access-log.yaml`
+
+**Root cause (product, not cluster config):**
+
+On RHOAI 3.5.0 GA, the shipped Kuadrant WASM plugin **does not populate** `wasm.kuadrant.auth.identity.*` FILTER_STATE keys after auth. The rest of the pipeline (EnvoyFilter body parsing, OTel Collector, Loki ingest, Perses dashboards) works — only FILTER_STATE identity is empty.
+
+**Important:** Upgrading RHCL/Kuadrant alone is **not** a known fix. giteltal-rosa runs **RHCL 1.4.2** (same operator line as ODH) and identity is **still** empty.
+
+#### Version matrix — identity in Loki usage logs (FILTER_STATE)
+
+| Platform | Cluster / build | RHCL / Kuadrant (CSV) | Identity in Loki? | Notes |
+|----------|-----------------|------------------------|-------------------|-------|
+| **ODH** | `amit.dev`, `giteltal.dev` | Kuadrant **1.4.2+** (POC) | **Yes** | `user_id`, `subscription`, `key_id`, `key_name` in Loki; dashboard user dropdown verified |
+| **RHOAI** | `3.5.0-ea.2` | RHCL **1.3.4** | **No** | First seen broken |
+| **RHOAI** | `3.5.0 GA` — giteltal-rosa | RHCL **1.4.2**, Authorino **1.4.2**, Limitador **1.4.1** | **No** | Re-verified 2026-08-12 after 200 inference (API key + OC token); auth works |
+| **RHOAI** | `ahadas-ahadas-rhoai` (earlier POC) | Not pinned in this doc | **No** | Line 829: all identity fields `-` on 429 ("platform limitation") |
+
+**Known-good stack:** ODH with Kuadrant **1.4.2+** (POC clusters above).
+
+**Known-bad stack:** RHOAI **3.5.0** (ea.2 and GA) — **no known-good RHOAI version** for identity in usage logs as of 2026-08-12. RHCL **1.4.2 on RHOAI GA is not sufficient**.
+
+**Not yet pinned (open for upstream):** exact WASM plugin image/build that populates `wasm.kuadrant.auth.identity.*` on ODH vs what ships on RHOAI GA. Next step for product: diff WASM/AuthPolicy identity → filter_state wiring between ODH POC and RHOAI 3.5.0 GA.
+
+First seen on RHOAI 3.5.0-ea.2 (RHCL 1.3.4). **Still broken on 3.5.0 GA** with RHCL 1.4.2 (giteltal-rosa).
+
+**What is NOT the cause:**
+
+- Not Loki RBAC (#9) — logs land; model/tokens prove write path works
+- Not tenancy-proxy SCC — proxy is unrelated to what Envoy writes to ALS
+- Not Perses / dashboard wiring (#11) — UI can load and query Loki; queries return no `user_id` / `subscription` **values** because they were never ingested
+- Not missing `premium-user` group — affects auth for premium models, not FILTER_STATE on successful 200 hits
+- Not RHCL/Kuadrant version alone — giteltal-rosa has **RHCL 1.4.2** (same operator line as working ODH) and identity is still empty
+
+**Impact:**
+
+- Cannot attribute token usage to a user or subscription in Loki
+- MaaS usage dashboards that filter/group by `user_id` or `subscription` have **nothing to show** (not a UI bug — data absent at source)
+- Tenancy-proxy user-scoped queries have no `user_id` to filter on
+
+**No workaround on giteltal-rosa:**
+
+Unlike RBAC (#9), SCC, or Perses (#11), there is **no cluster-side RBAC/HTTPRoute/secret fix** for this. Fixing it requires a **product change**:
+
+1. RHOAI Kuadrant/WASM version that populates `wasm.kuadrant.auth.identity.*` in FILTER_STATE after auth, **or**
+2. EnvoyFilter change to read identity from a source RHOAI GA actually exposes (if one exists)
+
+**For team / release notes (copy-paste):**
+
+> RHOAI 3.5.0 usage logging collects model and token metrics in Loki but does **not** collect `user_id`, `subscription`, or other identity fields. Auth and inference work; Envoy FILTER_STATE identity keys are empty on GA. **No cluster workaround.** Upgrading to RHCL 1.4.2 alone does not fix it (verified on giteltal-rosa). Identity works on ODH POC clusters (Kuadrant 1.4.2+); no known-good RHOAI stack yet. Requires upstream Kuadrant/WASM or EnvoyFilter fix.
+
+#### Issue #9 — RELEASE GAP: controller cannot create Loki write ClusterRole
+
+**Observed (giteltal-rosa, RHOAI 3.5.0, after `usageLogging: true`):**
+
+```
+apply ClusterRole /usage-collector-application-logs-write: ... is forbidden:
+user "system:serviceaccount:redhat-ods-applications:maas-controller" is attempting
+  to grant RBAC permissions not currently held:
+  {APIGroups:["loki.grafana.com"], Resources:["application"], ResourceNames:["logs"], Verbs:["create"]}
+```
+
+**What still applied:** EnvoyFilter `maas-model-access-logs`, OpenTelemetryCollector `usage-logs` (2/2).  
+**What did not:** `ClusterRole` / `ClusterRoleBinding` `usage-collector-application-logs-write` — collector has no permission to push to Loki gateway.
+
+**Root cause:** Kubernetes privilege escalation prevention — a subject cannot create a Role/ClusterRole granting verbs it does not itself possess. Stock `maas-controller` ClusterRole(s) do **not** include `loki.grafana.com` `application`/`logs` `create`. Parent-operator RBAC (ai-gateway / opendatahub-operator) also likely omits it.
+
+**Also:** `cluster-logging-application-write` ClusterRole (often provided with OpenShift Logging) is **NotFound** on this cluster — only Loki Operator was installed, not full cluster-logging stack.
+
+**Impact:** Usage-logs pipeline looks partially up; OTLP export to Loki will 403. No user-facing condition warns about this RBAC failure (reconciler errors in controller logs only). Ties to Issue #1 (false sense of readiness).
+
+**Fix direction:** Add `loki.grafana.com` application write to maas-controller ClusterRole (and parent operator mirrors in ai-gateway-operator + opendatahub-operator), **or** document that cluster-logging / Loki write ClusterRole must exist and be aggregatable before enabling `usageLogging`. See **Proposed maas-controller grant ClusterRole** in the giteltal-rosa section.
+
+**Workaround on giteltal-rosa (2026-08-12):** Manually created `ClusterRole/usage-collector-application-logs-write` + binding for SA `usage-logs-collector` in `redhat-ods-monitoring`, plus `ClusterRoleBinding/maas-controller-loki-application-write` so the controller SA holds the same permission (privilege-escalation rule). Also created proxy ClusterRoles, three bootstrap CRBs, and proxy runtime RoleBindings/CRB (see **Manual workarounds** table). Annotated `maas.opendatahub.io/workaround=issue-9-controller-lacks-loki-rbac`. Not a product fix.
+
+#### Issue #1 — no Loki/MinIO prerequisite signal
+
+Enabling `Config.spec.usageLogging: true` does **not** tell the operator that MinIO or LokiStack are missing:
+
+| Signal | Covers | Mentions MinIO/LokiStack? |
+|--------|--------|---------------------------|
+| `AITenant.status.conditions[ObservabilityReady]` | EnvoyFilter only (`UsageLoggingDisabled` / `MonitoringNamespaceNotConfigured` / `EnvoyFilterApplied` / `EnvoyFilterSkipped`) | **No** |
+| Controller log `skipping usage-logs resource: optional CRD not yet registered` | Optional CRDs only (`opentelemetry.io`, `perses.dev`) via `OptionalAPIGroups` | **No** (`loki.grafana.com` is **not** optional-gated) |
+| `Config.status` | Empty struct — no observed state | **No** |
+| `Config` CRD field docs | GDPR note about identity attributes | **No** |
+| Events / Warnings | None emitted for missing Loki backend | **No** |
+
+**What the controller actually owns when `usageLogging: true`:**
+1. Per-tenant **EnvoyFilter** (ALS → OTel gRPC) — drives `ObservabilityReady`
+2. **OpenTelemetryCollector** + tenancy proxy + Perses dashboards/datasources (best-effort; skip if CRD missing)
+
+**What it does *not* own or check:** Loki Operator, MinIO, LokiStack `usage`, Service `usage-gateway-http`. The OTel exporter URL is hardcoded to `https://usage-gateway-http.${NAMESPACE}.svc:8080/...` — if that Service is absent, only collector pod/exporter errors show it.
+
+**Failure mode:** OTel operator present, Loki/MinIO absent → EnvoyFilter applies → `ObservabilityReady=True` (`EnvoyFilterApplied`). Collector runs and fails export. Looks ready; pipeline is dead.
+
+##### How could the controller become aware / raise a warning?
+
+Today: **it cannot** — there is no reconcile check against Loki. Options (product design, not implemented):
+
+| Approach | How | Surface | Pros / cons |
+|----------|-----|---------|-------------|
+| **A. LokiStack CR presence** | `Get` `LokiStack/usage` in `MonitoringNamespace` (needs watch/RBAC on `loki.grafana.com`) | Condition e.g. `UsageLogsBackendReady=False`, reason `LokiStackNotFound` | Clear; couples to Loki Operator API; MinIO still indirect |
+| **B. Gateway Service presence** | `Get` Service `usage-gateway-http` in monitoring NS | Same condition, reason `LokiGatewayServiceNotFound` | No Loki CRD RBAC; doesn’t prove Loki is healthy, only that gateway Service exists |
+| **C. LokiStack Ready condition** | Read `LokiStack.status.conditions` (Ready/Available) | `UsageLogsBackendReady` mirrors Loki health | Strongest signal; still doesn’t name MinIO explicitly (LokiStack NotReady often means storage) |
+| **D. OTel collector export health** | Parse collector metrics/logs or pod Ready + last export error | Degraded condition | Reactive; flaky; no clean API today |
+| **E. Docs / install gate only** | Document MinIO+LokiStack as prereq; no controller check | Release notes / `oc explain` | Cheapest; operators still get false-ready `ObservabilityReady` |
+
+**Recommended direction (for discussion):** Extend readiness beyond EnvoyFilter-only:
+- Keep `ObservabilityReady` = EnvoyFilter applied **or** split into:
+  - `UsageLogsEnvoyFilterReady`
+  - `UsageLogsCollectorReady` (OTel CRD + collector)
+  - `UsageLogsBackendReady` (Service `usage-gateway-http` and/or LokiStack `usage` Ready)
+- Emit a **Warning Event** on Config/AITenant when `usageLogging: true` and backend check fails
+- Optionally populate `Config.status` (currently empty) with backend readiness
+
+**Note:** Controller should **not** install MinIO/LokiStack (cluster/admin concern). It should **detect absence** and refuse to claim “ready.”
+
+### Validation results (giteltal-rosa) — 2026-08-12
+
+Pipeline brought up with workarounds for #9 (manual Loki write RBAC), MinIO + LokiStack `usage`, OTel/Loki operators, and #10 (Kuadrant `mtls.authorino`).
+
+| Check | Result |
+|-------|--------|
+| `Config.spec.usageLogging: true` | EnvoyFilter `maas-model-access-logs` + OTelCollector `usage-logs` (2/2) |
+| Simulators | Free `facebook-opt-125m-simulated` + Premium `premium-simulated-simulated-premium` Ready; subscriptions Active |
+| Kuadrant / Auth | After #10 fix: AuthPolicy `Enforced=True`; api-keys **201** |
+| `./scripts/verify-models-and-limits.sh` | API key + discovery + inference **OK** (script fixed to use models API `owned_by` as path prefix — catalog `id` like `publishers/llm/models/...` is **not** the HTTPRoute prefix). Rate limit not triggered at free 100 tok/min with OC token traffic in this run |
+| Loki ingest | Query ` {model=~".+"} ` on `/api/logs/v1/application/...` returns streams with `response_type=hit`, `tokens_*`, `model` |
+| Identity attrs | **Not in Loki** — `user_id`, `subscription`, `groups`, `key_id`, `key_name`, `organization_id` all `-` on 200 hits (API-key + OC token). `model` / `tokens_*` / `response_type` present. Release gap — see **Issue #5** (no workaround). |
+
+**Premium path (follow-up):** Initially 403 — sample requires OpenShift Group `premium-user`, which was not created with the simulators. Created `Group/premium-user` with user `tgitelma`. Note: kube `TokenReview` without audiences may omit OpenShift groups on this ROSA OIDC setup; after group existed, premium inference + premium API key both returned **200**. Models list shows both free and premium.
+
+**Observe UI:** **Works** on giteltal-rosa after #11 workaround (2026-08-12). Federation manifests, Loki `query_range`, and panel load verified via gateway. Direct Loki query (`/api/logs/v1/application/...`) remains valid for pipeline-only validation.
+
+### Manual workarounds applied (giteltal-rosa only — not product)
+
+All objects annotated `maas.opendatahub.io/workaround` where noted. **Do not assume these exist on a fresh install.**
+
+| Workaround | Issue | What |
+|------------|-------|------|
+| `ClusterRole` + bindings for Loki write | #9 | `usage-collector-application-logs-write` → SA `usage-logs-collector`; `maas-controller-loki-application-write` → `maas-controller` |
+| Proxy ClusterRoles + bootstrap CRBs | #9 | `usage-tenancy-proxy-pods-log-read`, `usage-tenancy-proxy-application-logs-read`, `usage-tenancy-proxy-tokenreview`; bootstrap CRBs `maas-controller-usage-logs-grant-bootstrap`, `maas-controller-usage-logs-loki-read-bootstrap`, `maas-controller-usage-logs-tokenreview-bootstrap` (controller holds perms before granting) |
+| Proxy runtime bindings in monitoring NS | #9 | RoleBindings for proxy SA: `usage-tenancy-proxy-pods-log-read`, `usage-tenancy-proxy-application-logs-read`, `usage-tenancy-proxy-scc-nonroot-v2`; CRB `usage-tenancy-proxy-tokenreview` |
+| `Role/maas-controller-usage-logs-rbac` in monitoring NS | #9 | Lets controller create proxy RoleBindings in `redhat-ods-monitoring` |
+| `ClusterRoleBinding/maas-controller-scc-nonroot-v2` | SCC | Controller can create `usage-tenancy-proxy-scc-nonroot-v2` RoleBinding |
+| Kuadrant `spec.mtls.authorino: true` + Authorino TLS bootstrap | #10 | api-keys path after Kuadrant recreate; Gateway `authorino-tls-bootstrap=true` |
+| `Group/premium-user` | Sample | Premium inference (not created by sample apply) |
+| `NetworkPolicy/perses-dashboard-access` | #11 | Gateway → Perses |
+| `ReferenceGrant/allow-dashboard-to-perses` | #11 | Cross-namespace HTTPRoute backend |
+| `HTTPRoute/data-science-perses` (3 rewrite rules) | #11 | `/perses/api/api`→`/api`, `/perses/api/v1`→`/api/v1`, `/perses/api`→`/` |
+| SA + secrets + ClusterRole + Perses Secret API Bearer | #11 | `usage-logs-all-reader`, `usage-logs-multi-tenancy-reader`, `usage-logs-application-logs-read` (incl. **`namespaces` list** for OPA), token secrets, manual Bearer PUT into Perses API |
+
+**Not a cluster workaround:** Issue #5 (identity not in Loki) — upstream Kuadrant/WASM fix only.
+
+### Repo fix (validation script) — `scripts/verify-models-and-limits.sh`
+
+**Problem on RHOAI 3.5.0:** Models API returns catalog `id` (e.g. `publishers/llm/models/facebook-opt-125m-simulated`) but HTTPRoute prefix is `owned_by` (e.g. `llm/facebook-opt-125m-simulated`). Script built `/llm/${model_id}` → 404.
+
+**Fix (local, align with validation):** Parse `owned_by` from `/v1/models` response; when `model_url` is gateway root, use `${API_BASE}/${owned_by}` for inference and rate-limit tests. Fallback: `${API_BASE}/llm/${model_id}`.
+
+**Status:** Applied in working tree on giteltal-rosa branch; **commit separately** when opening PR (not part of cluster workarounds).
+
+### COO / Observe follow-up (giteltal-rosa) — 2026-08-12
+
+**Expected admin steps** (not workarounds):
+
+1. **COO** Subscription in `openshift-cluster-observability-operator` → CSV `cluster-observability-operator.v1.5.1` Succeeded; Perses CRDs + `perses-operator` running.
+2. **DSCI** `spec.monitoring.metrics.storage` (`10Gi` / `7d`, replicas 1) — empty `metrics: {}` left `PersesAvailable=False` (`MetricsNotConfigured`).
+3. **OdhDashboardConfig** `observabilityDashboard: true`.
+
+**Unexpected workarounds** (see table above): SCC (#SCC), #11 Perses gateway/datasource wiring.
+
+**Now present and verified:** `Perses/data-science-perses`, usage dashboards, datasources `usage-logs-all` + `usage-logs-multi-tenancy`, tenancy-proxy `1/1`, Observability tab panels load.
+
+**Still limited:** Identity fields (`user_id`, `subscription`, etc.) are **not ingested into Loki** — see **Issue #5**. Dashboards load and query Loki; per-user/per-subscription panels have no data because those attributes were never written at source.
+
+Dashboard URL: `https://rh-ai.apps.rosa.giteltal-rosa.6y5o.p3.openshiftapps.com` (Observability tab).
+
+### Historical note (pre-GA)
+
+See **Issue #5** for full write-up. Summary: identity in Loki works on **ODH** (Kuadrant 1.4.2+); empty on **RHOAI 3.5.0** since ea.2 (RHCL 1.3.4), unchanged on GA with RHCL 1.4.2 (giteltal-rosa, 2026-08-12).
 
 ---
 
